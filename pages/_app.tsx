@@ -2,6 +2,9 @@ import '../styles/globals.css'
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import { MantineProvider } from '@mantine/core';
+import {setupRUM} from "../src/cwRum";
+
+setupRUM();
 
 export default function App(props: AppProps) {
   const { Component, pageProps } = props;
