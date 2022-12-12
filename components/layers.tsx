@@ -10,6 +10,10 @@ export function Layers({info}: { info: any }) {
     let {created_by, ...rest} = h;
     const ret = rest.empty_layer ? rest : {...rest, ...layers[layerIdx++]};
 
+    if (!created_by) {
+      created_by = "# BUG see https://github.com/aidansteele/ima.ge.cx/issues/9"
+    }
+
     if (created_by.startsWith("|")) {
       const [prefix, ...rest] = created_by.split(" ");
       const count = parseInt(prefix.slice(1));
