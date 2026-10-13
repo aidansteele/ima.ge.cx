@@ -1,33 +1,19 @@
 import type {NextPage} from 'next'
-import {useEffect, useState} from 'react'
+import {useState} from 'react'
 import {useRouter} from "next/router";
-import {
-  ActionIcon,
-  AppShell,
-  Code,
-  Container,
-  Flex, Grid,
-  Group,
-  Header,
-  Loader,
-  Paper,
-  SimpleGrid, Space,
-  Table,
-  Tabs,
-  Text
-} from "@mantine/core";
+import {Code, Loader, Paper, SimpleGrid, Table, Tabs, Text} from "@mantine/core";
 import Head from "next/head";
 import {Prism} from "@mantine/prism";
 import {Layers} from "../components/layers";
 import {DirectoryNode} from "../components/node";
-import {DirectoryEntry, useFileContents, useImageInfo} from "../src/imageHooks";
+import {DirectoryEntry, ImageInfo, useFileContents, useImageInfo} from "../src/imageHooks";
 import {ImageIndexingView} from "../components/imageIndexingView";
 import {ImageSelector} from "../components/imageSelector";
 import {EnvVars} from "../components/envVars";
-import {IconBrandGithub, IconBrandTwitter} from "@tabler/icons";
+import {SiteShell} from "../components/siteShell";
 
 function FocusedContent({image, digest, path}: { image: string, digest: string, path: string }) {
-  const { data, isLoading, error } = useFileContents(image, digest, path);
+  const {data, isLoading, error} = useFileContents(image, digest, path);
 
   if (!path) {
     return <Paper mt={"lg"} shadow="xs" p="md" withBorder>
@@ -36,17 +22,17 @@ function FocusedContent({image, digest, path}: { image: string, digest: string, 
   }
 
   if (error) {
-    return <div>oh no an error occurred</div>;
+    return <Text color="red">Failed to load {path}: {error.message}</Text>;
   }
 
   if (isLoading) {
-    return <Loader />
+    return <Loader/>
   }
 
   return <Code block>{data}</Code>;
 }
 
-const ImageView = ({info, image, digest}: { info: any, image: string, digest: string }) => {
+function ImageView({info, image, digest}: { info: ImageInfo, image: string, digest: string }) {
   const [selectedFile, setSelectedFile] = useState("");
 
   const rootDirent: DirectoryEntry = {
@@ -55,7 +41,6 @@ const ImageView = ({info, image, digest}: { info: any, image: string, digest: st
     size: 0,
     typ: 53,
     linkname: '',
-    deletion: false,
     layer: ''
   }
 
@@ -85,7 +70,7 @@ const ImageView = ({info, image, digest}: { info: any, image: string, digest: st
             </Table>
           </div>
           <div>
-            <FocusedContent image={image} digest={digest} path={selectedFile} />
+            <FocusedContent image={image} digest={digest} path={selectedFile}/>
           </div>
         </SimpleGrid>
       </Tabs.Panel>
@@ -108,9 +93,9 @@ const ImageView = ({info, image, digest}: { info: any, image: string, digest: st
 }
 
 function FullyQualifiedView({image, digest}: { image: string, digest: string }) {
-  const {data: info, isLoading, error} = useImageInfo(image, digest);
-  if (error) return <div>failed to load fully qualified view</div>;
-  if (isLoading) return <Loader/>;
+  const {data: info, error} = useImageInfo(image, digest);
+  if (error) return <Text color="red">Failed to load image: {error.message}</Text>;
+  if (!info) return <Loader/>;
 
   switch (info.Status) {
     case "PENDING":
@@ -118,61 +103,35 @@ function FullyQualifiedView({image, digest}: { image: string, digest: string }) 
     case "RUNNING":
       return <ImageIndexingView info={info}/>;
     case "SUCCEEDED":
-      return <ImageView info={info} image={image} digest={digest}/>;
+      // Keyed by digest so that switching variants resets the selected file.
+      return <ImageView key={digest} info={info} image={image} digest={digest}/>;
     case "FAILED":
-      return <div>fqv failed {JSON.stringify(info)}</div>;
+      return <Text color="red">Indexing this image failed.</Text>;
     default:
-      return <div>fqv default</div>
+      return <Text color="red">Unexpected image status: {info.Status}</Text>;
   }
 }
 
-const Home: NextPage = () => {
+const ImagePage: NextPage = () => {
   const router = useRouter();
+  if (!router.isReady) return null;
 
-  const [image, setImage] = useState("");
-  const [digest, setDigest] = useState("")
+  const slug = router.query.slug as string[];
+  const [image, digest] = slug.join("/").split('@');
 
-  useEffect(() => {
-    if (!router.isReady) return;
-    const q = router.query.slug as string[];
-    const [image, digest] = q.join("/").split('@');
-    setImage(image);
-    setDigest(digest);
-  }, [router.isReady, router.query]);
-
-  if (image === "") {
-    return <div>no image specified</div>;
-  } else {
-    return <AppShell
-      padding="md"
-      header={<Header height={90} p="xs">
-        <Grid grow>
-          <Grid.Col span={6}>
-            <ImageSelector image={image} digest={digest}/>
-          </Grid.Col>
-          <Grid.Col span={5}></Grid.Col>
-          <Grid.Col span={1}>
-            <a href="https://github.com/aidansteele/ima.ge.cx"><ActionIcon color="blue" variant="light"><IconBrandGithub size={24} /></ActionIcon></a>
-          </Grid.Col>
-        </Grid>
-      </Header>}
-      styles={(theme) => ({
-        main: {backgroundColor: theme.colorScheme === 'dark' ? theme.colors.dark[8] : theme.colors.gray[0]},
-      })}
-    >
-      <Head>
-        <title>{image}</title>
-      </Head>
-      {digest ?
-        <FullyQualifiedView image={image} digest={digest}/> :
-        <Paper shadow="xs" p="md" withBorder>
-          <Text>
-            Select an image from the above dropdown to view its content and metadata.
-          </Text>
-        </Paper>
-      }
-    </AppShell>
-  }
+  return <SiteShell headerContent={<ImageSelector image={image} digest={digest}/>}>
+    <Head>
+      <title>{image}</title>
+    </Head>
+    {digest ?
+      <FullyQualifiedView image={image} digest={digest}/> :
+      <Paper shadow="xs" p="md" withBorder>
+        <Text>
+          Select an image from the above dropdown to view its content and metadata.
+        </Text>
+      </Paper>
+    }
+  </SiteShell>
 }
 
-export default Home
+export default ImagePage

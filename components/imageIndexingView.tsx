@@ -1,14 +1,18 @@
 import {formatBytes} from "../src/formatBytes";
 import {Progress, Table} from "@mantine/core";
+import {ImageInfo} from "../src/imageHooks";
 
-export function ImageIndexingView({info}: { info: any }) {
-  const progresses = info.Progresses ?? [];
-  progresses.sort((a: any, b: any) => b.TotalBytes - a.TotalBytes);
+// Returns completed as a percentage of total, or 0 when total isn't known yet.
+function percent(completed: number, total: number) {
+  return total > 0 ? 100 * completed / total : 0;
+}
 
-  const completed = info.CompletedSize || 0;
-  const total = info.TotalSize;
-  const percent = new Intl.NumberFormat("en-US", {style: "percent"}).format(completed / total);
-  const completedFiles = progresses.reduce((acc: number, lp: any) => acc + lp.CompletedFiles, 0);
+export function ImageIndexingView({info}: { info: ImageInfo }) {
+  // Copy before sorting: info is SWR's cached data and must not be mutated.
+  const progresses = [...(info.Progresses ?? [])].sort((a, b) => b.TotalBytes - a.TotalBytes);
+
+  const completed = info.CompletedSize ?? 0;
+  const total = info.TotalSize ?? 0;
 
   return <div>
     <p>
@@ -17,7 +21,7 @@ export function ImageIndexingView({info}: { info: any }) {
       of <strong>{formatBytes(total, 2)}</strong> total.
     </p>
 
-    <Progress value={100 * completed / total} size={"xl"} radius={"xl"} animate/>
+    <Progress value={percent(completed, total)} size={"xl"} radius={"xl"} animate/>
 
     <Table>
       <thead>
@@ -28,12 +32,12 @@ export function ImageIndexingView({info}: { info: any }) {
       </tr>
       </thead>
       <tbody>
-      {progresses.map((lp: any) => <tr key={lp.Layer}>
+      {progresses.map(lp => <tr key={lp.Layer}>
         <td>{lp.Layer.slice(7, 15)}</td>
         <td>{formatBytes(lp.TotalBytes, 2)}</td>
         <td>
-          <Progress color={lp.CompletedBytes == lp.TotalBytes ? 'green' : 'blue'}
-                    value={100 * lp.CompletedBytes / lp.TotalBytes}/>
+          <Progress color={lp.CompletedBytes === lp.TotalBytes ? 'green' : 'blue'}
+                    value={percent(lp.CompletedBytes, lp.TotalBytes)}/>
         </td>
       </tr>)}
       </tbody>
