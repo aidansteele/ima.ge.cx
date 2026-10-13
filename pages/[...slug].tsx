@@ -1,7 +1,7 @@
 import type {NextPage} from 'next'
 import {useState} from 'react'
 import {useRouter} from "next/router";
-import {Button, Code, CopyButton, Group, Loader, Paper, SimpleGrid, Table, Tabs, Text} from "@mantine/core";
+import {Box, Button, Code, CopyButton, Group, Loader, Paper, SimpleGrid, Table, Tabs, Text} from "@mantine/core";
 import {IconCheck, IconLink} from "@tabler/icons";
 import Head from "next/head";
 import {Prism} from "@mantine/prism";
@@ -12,6 +12,7 @@ import {ImageIndexingView} from "../components/imageIndexingView";
 import {ImageSelector} from "../components/imageSelector";
 import {EnvVars} from "../components/envVars";
 import {SiteShell} from "../components/siteShell";
+import {TagSelector} from "../components/tagSelector";
 import {useHashPath} from "../src/useHashPath";
 
 function FocusedContent({image, digest, path}: { image: string, digest: string, path: string }) {
@@ -150,7 +151,10 @@ const ImagePage: NextPage = () => {
   const slug = router.query.slug as string[];
   const [image, digest] = slug.join("/").split('@');
 
-  return <SiteShell headerContent={<ImageSelector image={image} digest={digest}/>}>
+  return <SiteShell headerContent={<Group noWrap align="flex-start">
+    <Box sx={{flex: 1}}><TagSelector image={image}/></Box>
+    <Box sx={{flex: 1}}><ImageSelector image={image} digest={digest}/></Box>
+  </Group>}>
     <Head>
       <title>{image}</title>
     </Head>

@@ -134,3 +134,14 @@ export function useImageOptions(image: string) {
   const key = apiUrl('lookup', {image});
   return useSWR<ImageOptionsResponse, Error>(key, fetchJson);
 }
+
+interface ImageTagsResponse {
+  Tags?: string[];
+  Error?: string;
+}
+
+export function useImageTags(repo: string) {
+  const key = apiUrl('tags', {image: repo});
+  // Tags change rarely, and large repositories have thousands of them.
+  return useSWRImmutable<ImageTagsResponse, Error>(key, fetchJson);
+}
