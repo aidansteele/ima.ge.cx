@@ -1,16 +1,27 @@
 package s3select
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"io"
 )
 
+// Quote returns s as an S3 Select SQL string literal. S3 Select escapes a
+// single quote by doubling it and does not support backslash escapes.
+func Quote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// Select runs query against the gzipped JSON Lines object at bucket/key and
+// decodes each returned record into a T.
 func Select[T any](ctx context.Context, api *s3.Client, bucket, key, query string) ([]T, error) {
 	sel, err := api.SelectObjectContent(ctx, &s3.SelectObjectContentInput{
 		Bucket:         &bucket,
@@ -24,66 +35,39 @@ func Select[T any](ctx context.Context, api *s3.Client, bucket, key, query strin
 		OutputSerialization: &types.OutputSerialization{
 			JSON: &types.JSONOutput{RecordDelimiter: aws.String("\n")},
 		},
-		RequestProgress: &types.RequestProgress{
-			Enabled: true,
-		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("selecting object content: %w", err)
 	}
 
-	pr, pw := io.Pipe()
-	resultsch := make(chan []T, 1)
-
-	go func() {
-		entries := []T{}
-
-		scan := bufio.NewScanner(pr)
-		for scan.Scan() {
-			var t T
-			line := scan.Bytes()
-			err = json.Unmarshal(line, &t)
-			if err != nil {
-				panic(fmt.Errorf("unmarshalling JSON line: %w", err))
-			}
-
-			entries = append(entries, t)
-		}
-
-		resultsch <- entries
-	}()
-
 	stream := sel.GetStream()
-	events := stream.Events()
+	defer stream.Close()
 
-	for {
-		select {
-		case <-ctx.Done():
-			stream.Close()
-			return nil, ctx.Err()
-		case ev, more := <-events:
-			if !more {
-				goto done
-			}
-			switch ev := ev.(type) {
-			case *types.SelectObjectContentEventStreamMemberStats:
-				//spew.Dump("stats", ev.Value.Details)
-			case *types.SelectObjectContentEventStreamMemberProgress:
-				//spew.Dump("progress", ev.Value.Details)
-			case *types.SelectObjectContentEventStreamMemberCont:
-				//spew.Dump("cont")
-			case *types.SelectObjectContentEventStreamMemberEnd:
-				//spew.Dump("end")
-			case *types.SelectObjectContentEventStreamMemberRecords:
-				//spew.Dump("records", ev.Value.Payload)
-				pw.Write(ev.Value.Payload)
-			default:
-				panic("unexpected event type")
-			}
+	// Records events can split a JSON line across payloads, so collect them
+	// all before decoding.
+	buf := &bytes.Buffer{}
+	for ev := range stream.Events() {
+		if records, ok := ev.(*types.SelectObjectContentEventStreamMemberRecords); ok {
+			buf.Write(records.Value.Payload)
 		}
 	}
-done:
+	if err := stream.Err(); err != nil {
+		return nil, fmt.Errorf("reading select event stream: %w", err)
+	}
 
-	pw.Close()
-	return <-resultsch, nil
+	entries := []T{}
+	dec := json.NewDecoder(buf)
+	for {
+		var t T
+		err := dec.Decode(&t)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("unmarshalling JSON record: %w", err)
+		}
+		entries = append(entries, t)
+	}
+
+	return entries, nil
 }

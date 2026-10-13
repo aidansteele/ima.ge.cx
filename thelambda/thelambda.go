@@ -14,8 +14,11 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -72,10 +75,10 @@ func main() {
 	}
 
 	r := mux.NewRouter()
-	r.HandleFunc("/api/dir", h.handleListDirectory)
-	r.HandleFunc("/api/file", h.handleFileContents)
-	r.HandleFunc("/api/info", h.handleInfo)
-	r.HandleFunc("/api/lookup", h.handleLookup)
+	r.HandleFunc("/api/dir", handleErrors(h.handleListDirectory))
+	r.HandleFunc("/api/file", handleErrors(h.handleFileContents))
+	r.HandleFunc("/api/info", handleErrors(h.handleInfo))
+	r.HandleFunc("/api/lookup", handleErrors(h.handleLookup))
 
 	r.Use(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +102,7 @@ func main() {
 			defer func() {
 				rerr := recover()
 
-				duration := time.Now().Sub(start)
+				duration := time.Since(start)
 				msi := emf.MSI{
 					"FunctionVersion": version,
 					"Path":            r.URL.Path,
@@ -110,9 +113,11 @@ func main() {
 				defer emf.Emit(msi)
 
 				if rerr != nil {
+					// Re-panicking would make the Lambda runtime exit the process
+					// and the client would get a 502, so respond with a 500 instead.
 					msi["Error"] = fmt.Sprintf("%+v", rerr)
-					slog.ErrorContext(ctx, "request panicked", "error", rerr)
-					panic(rerr)
+					slog.ErrorContext(ctx, "request panicked", "error", rerr, "stack", string(debug.Stack()))
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				}
 			}()
 
@@ -142,6 +147,85 @@ type handler struct {
 	entropy   io.Reader
 }
 
+// statusError is an error that should be reported to the client with a specific HTTP status.
+type statusError struct {
+	status int
+	err    error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
+func withStatus(status int, err error) error {
+	return &statusError{status: status, err: err}
+}
+
+// handleErrors adapts a handler that returns an error into an http.HandlerFunc.
+// Errors become 500 responses unless they carry a status via withStatus.
+func handleErrors(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		err := fn(w, r)
+		if err == nil {
+			return
+		}
+
+		status := http.StatusInternalServerError
+		msg := http.StatusText(status)
+		var se *statusError
+		if errors.As(err, &se) {
+			status = se.status
+			msg = se.Error()
+		}
+
+		level := slog.LevelError
+		if status < http.StatusInternalServerError {
+			level = slog.LevelWarn
+		}
+		slog.Log(r.Context(), level, "handling HTTP request", "error", err, "status", status)
+		http.Error(w, msg, status)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) error {
+	j, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshalling response: %w", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(j)
+	return nil
+}
+
+func isNoSuchKey(err error) bool {
+	var ae smithy.APIError
+	return errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey"
+}
+
+func isConditionalCheckFailed(err error) bool {
+	var ccf *types.ConditionalCheckFailedException
+	return errors.As(err, &ccf)
+}
+
+// parseImageQuery reads the image and digest query parameters. repo is the
+// image name with any tag removed, as used in DynamoDB and S3 keys.
+func parseImageQuery(q url.Values) (repo string, ref name.Digest, err error) {
+	image := q.Get("image")
+	repo = image
+	// A colon after the last slash starts the tag; an earlier one belongs to a registry port.
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		repo = image[:i]
+	}
+
+	ref, err = name.NewDigest(repo + "@" + q.Get("digest"))
+	if err != nil {
+		return "", name.Digest{}, withStatus(http.StatusBadRequest, fmt.Errorf("invalid image or digest: %w", err))
+	}
+
+	return repo, ref, nil
+}
+
 type lookupOutput struct {
 	Error   string        `json:",omitempty"`
 	Options []imageOption `json:",omitempty"`
@@ -161,74 +245,83 @@ func (h *handler) remoteOptions(ctx context.Context) []remote.Option {
 	}
 }
 
-func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleLookup(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	imageQuery := r.URL.Query().Get("image")
+	w.Header().Set("Cache-Control", "max-age=60")
 
-	writeOutput := func(output lookupOutput) {
-		j, _ := json.Marshal(output)
-		w.Header().Set("Cache-Control", "max-age=60")
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(j)
+	opts, err := h.lookupOptions(ctx, r.URL.Query().Get("image"))
+	if err != nil {
+		return writeJSON(w, http.StatusOK, lookupOutput{Error: err.Error()})
 	}
 
+	return writeJSON(w, http.StatusOK, lookupOutput{Options: opts})
+}
+
+// lookupOptions returns the platform variants of an image reference.
+func (h *handler) lookupOptions(ctx context.Context, imageQuery string) ([]imageOption, error) {
 	ref, err := name.ParseReference(imageQuery)
 	if err != nil {
-		writeOutput(lookupOutput{Error: err.Error()})
-		return
+		return nil, err
 	}
-
-	opts := []imageOption{}
 
 	desc, err := remote.Get(ref, h.remoteOptions(ctx)...)
 	if err != nil {
-		writeOutput(lookupOutput{Error: err.Error()})
-		return
+		return nil, err
 	}
 
-	// Check if this is an index (manifest list) or a single image
 	if desc.MediaType.IsIndex() {
 		index, err := desc.ImageIndex()
 		if err != nil {
-			writeOutput(lookupOutput{Error: err.Error()})
-			return
+			return nil, err
 		}
 
 		im, err := index.IndexManifest()
 		if err != nil {
-			writeOutput(lookupOutput{Error: err.Error()})
-			return
+			return nil, err
 		}
 
+		opts := []imageOption{}
 		for _, manifest := range im.Manifests {
+			// Skip entries that aren't runnable images, such as the build
+			// attestation manifests (platform unknown/unknown) that BuildKit adds.
+			if manifest.Platform == nil || manifest.Annotations["vnd.docker.reference.type"] == "attestation-manifest" {
+				continue
+			}
+
 			opts = append(opts, imageOption{
 				Digest:   manifest.Digest,
 				Platform: manifest.Platform,
 			})
 		}
-	} else {
-		// Single image manifest (v2 or schema1)
-		image, err := desc.Image()
-		if err != nil {
-			writeOutput(lookupOutput{Error: err.Error()})
-			return
-		}
 
-		digest, _ := image.Digest()
-		cf, _ := image.ConfigFile()
-
-		opts = append(opts, imageOption{
-			Digest: digest,
-			Platform: &v1.Platform{
-				Architecture: cf.Architecture,
-				OS:           cf.OS,
-				OSVersion:    cf.OSVersion,
-				Variant:      cf.Variant,
-			},
-		})
+		return opts, nil
 	}
 
-	writeOutput(lookupOutput{Options: opts})
+	// Single image manifest (v2 or schema1)
+	image, err := desc.Image()
+	if err != nil {
+		return nil, err
+	}
+
+	digest, err := image.Digest()
+	if err != nil {
+		return nil, err
+	}
+
+	cf, err := image.ConfigFile()
+	if err != nil {
+		return nil, err
+	}
+
+	return []imageOption{{
+		Digest: digest,
+		Platform: &v1.Platform{
+			Architecture: cf.Architecture,
+			OS:           cf.OS,
+			OSVersion:    cf.OSVersion,
+			Variant:      cf.Variant,
+		},
+	}}, nil
 }
 
 type LayerProgress struct {
@@ -258,15 +351,16 @@ func estimateSeconds(totalSize int64) int64 {
 	return 2 + (totalSize / 25e6)
 }
 
-func (h *handler) handleStartExecution(key *bitypes.ImageInfoKey, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleStartExecution(key *bitypes.ImageInfoKey, w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	w.Header().Set("Cache-Control", "no-store")
 
 	executionId := fmt.Sprintf("BI%s10", ulid.MustNew(ulid.Timestamp(time.Now()), h.entropy))
 
 	item := &bitypes.ImageInfoItem{
 		ImageInfoKey: *key,
 		ExecutionId:  executionId,
-		Status:       "PENDING",
+		Status:       bitypes.ImageInfoStatusPending,
 		Retrieved:    time.Now(),
 	}
 
@@ -275,11 +369,19 @@ func (h *handler) handleStartExecution(key *bitypes.ImageInfoKey, w http.Respons
 		Item:                item.DynamoItem(),
 		ConditionExpression: aws.String("attribute_not_exists(pk)"),
 	})
+	if isConditionalCheckFailed(err) {
+		// A concurrent request started indexing this image first. The client
+		// polls while the status is pending, so it will see that execution.
+		return writeJSON(w, http.StatusOK, HandleImageOutput{Status: bitypes.ImageInfoStatusPending})
+	}
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("putting image info item: %w", err)
 	}
 
-	sfnInput, _ := json.Marshal(key)
+	sfnInput, err := json.Marshal(key)
+	if err != nil {
+		return fmt.Errorf("marshalling execution input: %w", err)
+	}
 
 	_, err = h.sfn.StartExecution(ctx, &sfn.StartExecutionInput{
 		StateMachineArn: &h.machine,
@@ -288,38 +390,45 @@ func (h *handler) handleStartExecution(key *bitypes.ImageInfoKey, w http.Respons
 		Input:           aws.String(string(sfnInput)),
 	})
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		// Without this, the image would stay pending until the item expires.
+		_, delErr := h.dynamodb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName:                 &h.table,
+			Key:                       item.Key(),
+			ConditionExpression:       aws.String("ExecutionId = :executionId"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":executionId": &types.AttributeValueMemberS{Value: executionId}},
+		})
+		return errors.Join(fmt.Errorf("starting execution: %w", err), delErr)
 	}
 
 	_, err = h.dynamodb.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                &h.table,
 		Key:                      item.Key(),
-		UpdateExpression:         aws.String("SET #status = :status"),
-		ConditionExpression:      aws.String("ExecutionId = :executionId"),
+		UpdateExpression:         aws.String("SET #status = :running"),
+		ConditionExpression:      aws.String("ExecutionId = :executionId AND #status = :pending"),
 		ExpressionAttributeNames: map[string]string{"#status": "Status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":executionId": &types.AttributeValueMemberS{Value: executionId},
-			":status":      &types.AttributeValueMemberS{Value: "RUNNING"},
+			":pending":     &types.AttributeValueMemberS{Value: string(bitypes.ImageInfoStatusPending)},
+			":running":     &types.AttributeValueMemberS{Value: string(bitypes.ImageInfoStatusRunning)},
 		},
 	})
-	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+	// If the condition fails, the execution has already finished and the
+	// finalizer's status must not be overwritten.
+	if err != nil && !isConditionalCheckFailed(err) {
+		return fmt.Errorf("marking image info running: %w", err)
 	}
 
-	j, _ := json.Marshal(item)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write(j)
+	return writeJSON(w, http.StatusCreated, item)
 }
 
-func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
-	q := r.URL.Query()
-	image := q.Get("image")
-	repo, _, _ := strings.Cut(image, ":") // drop tag (if any)
-	digest := q.Get("digest")
+	repo, ref, err := parseImageQuery(r.URL.Query())
+	if err != nil {
+		return err
+	}
+	digest := ref.DigestStr()
 
 	p := dynamodb.NewQueryPaginator(h.dynamodb, &dynamodb.QueryInput{
 		TableName:              &h.table,
@@ -338,21 +447,22 @@ func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
-			panic(fmt.Sprintf("%+v", err))
+			return fmt.Errorf("querying image info: %w", err)
 		}
 
 		for _, item := range page.Items {
 			sk := strings.Split(item["sk"].(*types.AttributeValueMemberS).Value, "#")
-			if len(sk) == 2 {
+			switch len(sk) {
+			case 2:
 				err = attributevalue.UnmarshalMap(item, &imageInfo)
 				if err != nil {
-					panic(fmt.Sprintf("%+v", err))
+					return fmt.Errorf("unmarshalling image info: %w", err)
 				}
-			} else if len(sk) == 4 {
+			case 4:
 				lp := bitypes.LayerProgress{}
 				err = attributevalue.UnmarshalMap(item, &lp)
 				if err != nil {
-					panic(fmt.Sprintf("%+v", err))
+					return fmt.Errorf("unmarshalling layer progress: %w", err)
 				}
 				progresses = append(progresses, LayerProgress{
 					Layer:          lp.LayerDigest,
@@ -363,16 +473,15 @@ func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 				})
 
 				completedSize += lp.CompletedBytes
-			} else {
-				panic(fmt.Sprintf("unexpected dynamo item: %+v", item))
+			default:
+				return fmt.Errorf("unexpected dynamo item: %+v", item)
 			}
 		}
 	}
 
 	// image was not in dynamodb
 	if imageInfo.Digest == "" {
-		h.handleStartExecution(&bitypes.ImageInfoKey{Repo: repo, Digest: digest}, w, r)
-		return
+		return h.handleStartExecution(&bitypes.ImageInfoKey{Repo: repo, Digest: digest}, w, r)
 	}
 
 	maxAge := time.Second
@@ -395,22 +504,22 @@ func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) {
 		Manifest:        imageInfo.Manifest,
 	}
 
-	j, _ := json.Marshal(output)
-
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d", maxAge/time.Second))
-	w.Write(j)
+	return writeJSON(w, http.StatusOK, output)
 }
 
-func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
+func indexKey(repo string, ref name.Digest) string {
+	return fmt.Sprintf("images/%s/%s/index.json.gz", repo, ref.DigestStr())
+}
+
+func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
 	q := r.URL.Query()
-
-	image := q.Get("image")
-	image, tag, _ := strings.Cut(image, ":") // drop tag (if any)
-	digest := q.Get("digest")
-	key := fmt.Sprintf("images/%s/%s/index.json.gz", image, digest)
+	repo, ref, err := parseImageQuery(q)
+	if err != nil {
+		return err
+	}
 
 	path := q.Get("path")
 	if path == "" {
@@ -418,149 +527,142 @@ func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msi := emf.MSI{
-		"Image":      image,
-		"Tag":        tag,
-		"Digest":     digest,
+		"Image":      repo,
+		"Digest":     ref.DigestStr(),
 		"Path":       path,
 		"StatusCode": emf.Dimension("200"),
 	}
 	defer emf.Emit(msi)
 
-	escapedPath := strings.ReplaceAll(path, "'", "''")
-	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Parent = '%s'", escapedPath)
-	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, key, query)
+	query := "SELECT * FROM s3object s WHERE s.Parent = " + s3select.Quote(path)
+	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, indexKey(repo, ref), query)
+	if isNoSuchKey(err) {
+		msi["StatusCode"] = emf.Dimension("404")
+		return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
+	}
 	if err != nil {
-		var ae smithy.APIError
-		if errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
-			http.NotFound(w, r)
-			msi["StatusCode"] = emf.Dimension("404")
-			return
-		}
-
 		msi["StatusCode"] = emf.Dimension("500")
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("listing directory: %w", err)
 	}
 
-	j, _ := json.Marshal(entries)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(j)
+	return writeJSON(w, http.StatusOK, entries)
 }
 
-func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
 	q := r.URL.Query()
-
-	image := q.Get("image")
-	image, _, _ = strings.Cut(image, ":") // drop tag (if any)
-	digest := q.Get("digest")
-	key := fmt.Sprintf("images/%s/%s/index.json.gz", image, digest)
-	//prefix := h.prefix(ctx, img, digest)
+	repo, ref, err := parseImageQuery(q)
+	if err != nil {
+		return err
+	}
 
 	path := q.Get("path")
 
-	// Escape single quotes for S3 Select SQL (S3 Select uses '' escaping, not backslash)
-	escapedPath := strings.ReplaceAll(path, "'", "''")
-	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Hdr.Name = '%s'", escapedPath)
-	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, key, query)
+	query := "SELECT * FROM s3object s WHERE s.Hdr.Name = " + s3select.Quote(path)
+	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, indexKey(repo, ref), query)
+	if isNoSuchKey(err) {
+		return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
+	}
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("querying file index: %w", err)
 	}
 
+	if len(entries) == 0 {
+		return withStatus(http.StatusNotFound, errors.New("file not found"))
+	}
 	if len(entries) != 1 {
-		panic(fmt.Errorf("unexpected number of entries: %d", len(entries)))
+		return fmt.Errorf("unexpected number of entries: %d", len(entries))
 	}
 	entry := entries[0]
 
-	get, err := h.s3.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: &h.bucket,
-		Key:    aws.String(fmt.Sprintf("layers/%s/index.gzi", entry.Layer)),
-	})
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	// Empty files, directories and links have no content to extract, and gztool rejects a zero length.
+	if entry.Hdr.Size == 0 {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		return nil
+	}
+
+	indexPath, err := h.downloadGzipIndex(ctx, entry.Layer)
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return err
 	}
+	defer os.Remove(indexPath)
 
-	indexFile, err := os.CreateTemp("", "gzi*")
+	spans, err := targzi.Spans(indexPath)
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("reading spans: %w", err)
 	}
-	defer os.Remove(indexFile.Name())
 
-	defer get.Body.Close()
-	_, err = io.Copy(indexFile, get.Body)
+	start, end, err := targzi.CompressedRange(spans, entry.Spans)
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("finding compressed range: %w", err)
 	}
 
-	err = indexFile.Close()
+	repository := ref.Context()
+	ctx = auth.WithScopes(ctx, ref.Scope("pull"))
+
+	blobURL := fmt.Sprintf("https://%s/v2/%s/blobs/%s", repository.RegistryStr(), repository.RepositoryStr(), entry.Layer)
+	req, err := http.NewRequestWithContext(ctx, "GET", blobURL, nil)
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("creating HTTP request: %w", err)
 	}
-
-	spans, err := targzi.Spans(indexFile.Name())
-	if err != nil {
-		panic(fmt.Errorf("reading spans: %w", err))
-	}
-
-	if len(entry.Spans) == 0 {
-		panic(fmt.Errorf("entry has no spans"))
-	}
-
-	//span := IndexSpan{}
-	start := 0
-	end := 0
-	firstSpan := entry.Spans[0]
-	lastSpan := entry.Spans[len(entry.Spans)-1]
-	for idx, s := range spans {
-		if s.Number == firstSpan {
-			start = s.Compressed
-		}
-		if s.Number == lastSpan {
-			if idx+1 < len(spans) {
-				end = spans[idx+1].Compressed
-			}
-		}
-	}
-
-	rangeHdr := fmt.Sprintf("bytes=%d-", start-1)
-	if end > 0 {
-		rangeHdr += fmt.Sprintf("%d", end)
-	}
-
-	ref, err := name.ParseReference(image)
-	if err != nil {
-		panic(err)
-	}
-
-	repo := ref.Context()
-	slog.DebugContext(ctx, "parsed image reference",
-		"ref", ref.String(),
-		"context", repo.String(),
-		"registry", repo.Registry.String(),
-		"identifier", ref.Identifier(),
-		"repostr", repo.RepositoryStr(),
-	)
-
-	scope := ref.Scope("pull")
-	ctx = auth.WithScopes(ctx, scope)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://%s/v2/%s/blobs/%s", repo.RegistryStr(), repo.RepositoryStr(), entry.Layer), nil)
-	if err != nil {
-		panic(fmt.Errorf("creating HTTP request: %w", err))
-	}
-	req.Header.Set("Range", rangeHdr)
+	req.Header.Set("Range", targzi.RangeHeader(start, end))
 
 	resp, err := h.http.Do(req)
 	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+		return fmt.Errorf("fetching layer blob: %w", err)
 	}
-
 	defer resp.Body.Close()
-	extracted, err := targzi.Extract(ctx, resp.Body, indexFile.Name(), start, entry.Offset, int(entry.Hdr.Size))
-	if err != nil {
-		panic(fmt.Sprintf("%+v", err))
+
+	// gztool needs the body to begin at the requested offset; any other
+	// response (an error or the whole blob) would produce garbage.
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("fetching layer blob: unexpected status %s", resp.Status)
 	}
 
-	w.Header().Set("Content-Type", http.DetectContentType(extracted))
+	extracted, err := targzi.Extract(ctx, resp.Body, indexPath, start, entry.Offset, int(entry.Hdr.Size))
+	if err != nil {
+		return fmt.Errorf("extracting file: %w", err)
+	}
+
+	// Never let browsers render image content (e.g. HTML) as active content on this origin.
+	contentType := "application/octet-stream"
+	mediaType, params, _ := mime.ParseMediaType(http.DetectContentType(extracted))
+	if strings.HasPrefix(mediaType, "text/") {
+		contentType = mime.FormatMediaType("text/plain", params)
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Write(extracted)
+	return nil
+}
+
+// downloadGzipIndex downloads a layer's gztool index to a temporary file and
+// returns its path. The caller must remove the file.
+func (h *handler) downloadGzipIndex(ctx context.Context, layer string) (string, error) {
+	get, err := h.s3.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &h.bucket,
+		Key:    aws.String(fmt.Sprintf("layers/%s/index.gzi", layer)),
+	})
+	if err != nil {
+		return "", fmt.Errorf("getting gzip index: %w", err)
+	}
+	defer get.Body.Close()
+
+	indexFile, err := os.CreateTemp("", "gzi*")
+	if err != nil {
+		return "", fmt.Errorf("creating gzip index file: %w", err)
+	}
+
+	_, err = io.Copy(indexFile, get.Body)
+	if closeErr := indexFile.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(indexFile.Name())
+		return "", fmt.Errorf("writing gzip index file: %w", err)
+	}
+
+	return indexFile.Name(), nil
 }

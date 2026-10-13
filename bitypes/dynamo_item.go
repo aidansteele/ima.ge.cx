@@ -27,9 +27,9 @@ type ImageInfoStatus string
 
 const (
 	ImageInfoStatusPending   ImageInfoStatus = "PENDING"
-	ImageInfoStatusRunning                   = "RUNNING"
-	ImageInfoStatusSucceeded                 = "SUCCEEDED"
-	ImageInfoStatusFailed                    = "FAILED"
+	ImageInfoStatusRunning   ImageInfoStatus = "RUNNING"
+	ImageInfoStatusSucceeded ImageInfoStatus = "SUCCEEDED"
+	ImageInfoStatusFailed    ImageInfoStatus = "FAILED"
 )
 
 type ImageInfoItem struct {

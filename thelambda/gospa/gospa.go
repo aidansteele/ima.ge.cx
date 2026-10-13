@@ -2,21 +2,27 @@ package gospa
 
 import (
 	"bytes"
-	"io"
+	"fmt"
 	"io/fs"
 	"net/http"
 )
 
-func Handler(fsys fs.FS, indexPath string) http.Handler {
-	f, _ := fsys.Open(indexPath)
-	body, _ := io.ReadAll(f)
-	reader := bytes.NewReader(body)
-	stat, _ := f.Stat()
+func Handler(fsys fs.FS, indexPath string) (http.Handler, error) {
+	body, err := fs.ReadFile(fsys, indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading index: %w", err)
+	}
+
+	stat, err := fs.Stat(fsys, indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("getting index stats: %w", err)
+	}
 
 	return intercept404(http.FileServer(http.FS(fsys)), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		http.ServeContent(w, r, indexPath, stat.ModTime(), reader)
-	}))
+		// ServeContent seeks the reader, so each request needs its own.
+		http.ServeContent(w, r, indexPath, stat.ModTime(), bytes.NewReader(body))
+	})), nil
 }
 
 type hookedResponseWriter struct {

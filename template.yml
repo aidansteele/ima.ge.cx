@@ -148,7 +148,8 @@ Resources:
       BuildMethod: go1.x
     Properties:
       CodeUri: ./layerreader/remote
-      Timeout: 300
+      # Lambda's maximum. Layers index at roughly 5 MB/s, so this covers ~4 GB compressed layers.
+      Timeout: 900
       Environment:
         Variables:
           TABLE: !Ref Table

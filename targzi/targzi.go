@@ -2,13 +2,11 @@ package targzi
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/aws/aws-xray-sdk-go/xray"
-	"github.com/klauspost/compress/gzip"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	"github.com/aws/aws-xray-sdk-go/xray"
+	"github.com/klauspost/compress/gzip"
 )
 
 type Entry struct {
@@ -65,10 +66,13 @@ func ReadIndex(dir string) (*Index, error) {
 
 	entries := []*Entry{}
 
-	scan := bufio.NewScanner(gzr)
-	for scan.Scan() {
+	dec := json.NewDecoder(gzr)
+	for {
 		e := Entry{}
-		err = json.Unmarshal(scan.Bytes(), &e)
+		err = dec.Decode(&e)
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return nil, fmt.Errorf("unmarshalling entry: %w", err)
 		}
@@ -153,9 +157,6 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 			return nil, fmt.Errorf("iterating tar file: %w", err)
 		}
 
-		//idx := strings.LastIndex(hdr.Name, "/")
-		//hdr.Name = hdr.Name[:idx] + "#" + hdr.Name[idx+1:]
-
 		hdr.Name = filepath.Clean(hdr.Name)
 		if hdr.Name == "." {
 			hdr.Name = "/"
@@ -190,20 +191,17 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 
 		if len(isplit) == len(jsplit) {
 			return iname < jname
-		} else {
-			return len(isplit) < len(jsplit)
 		}
-		//ip, is, _ := strings.Cut(entries[i].Hdr.Name, "#")
-		//jp, js, _ := strings.Cut(entries[j].Hdr.Name, "#")
-		//
-		//if ip == jp {
-		//	return is < js
-		//} else {
-		//	return ip < jp
-		//}
-		//
-		////return entries[i].Hdr.Name < entries[j].Hdr.Name
+		return len(isplit) < len(jsplit)
 	})
+
+	// The tar reader stops at the end-of-archive marker, but gztool keeps
+	// writing any trailing padding. Drain it so gztool can exit; Wait must
+	// not be called before all reads from the pipe have completed.
+	_, err = io.Copy(io.Discard, stdout)
+	if err != nil {
+		return nil, fmt.Errorf("draining gztool output: %w", err)
+	}
 
 	err = cmd.Wait()
 	if err != nil {
@@ -212,7 +210,7 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 
 	spans, err := Spans(gzIndexPath)
 	if err != nil {
-		return nil, fmt.Errorf("Spans: %w", err)
+		return nil, fmt.Errorf("reading index spans: %w", err)
 	}
 
 	sort.Slice(spans, func(i, j int) bool {
@@ -237,13 +235,21 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 
 	gzw := gzip.NewWriter(findex)
 
+	// json.Encoder terminates each value with a newline, producing JSON Lines.
+	enc := json.NewEncoder(gzw)
 	for _, entry := range entries {
-		j, _ := json.Marshal(entry)
-		gzw.Write(j)
-		gzw.Write([]byte{'\n'})
+		err = enc.Encode(entry)
+		if err != nil {
+			return nil, fmt.Errorf("writing file index entry: %w", err)
+		}
 	}
 
 	err = gzw.Close()
+	if err != nil {
+		return nil, fmt.Errorf("closing file index gzip stream: %w", err)
+	}
+
+	err = findex.Close()
 	if err != nil {
 		return nil, fmt.Errorf("closing file index: %w", err)
 	}
@@ -253,6 +259,46 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 		GzIndexPath:   gzIndexPath,
 		FileIndexPath: fileIndexPath,
 	}, nil
+}
+
+// CompressedRange returns the compressed byte offsets needed to extract an
+// entry that covers the given index span numbers. start is the compressed
+// offset of the first span; end is the compressed offset of the span after
+// the last one, or 0 if the entry runs to the end of the file.
+func CompressedRange(spans []IndexSpan, entrySpans []int) (start, end int, err error) {
+	if len(entrySpans) == 0 {
+		return 0, 0, fmt.Errorf("entry has no spans")
+	}
+
+	firstSpan := entrySpans[0]
+	lastSpan := entrySpans[len(entrySpans)-1]
+	foundFirst := false
+	for idx, s := range spans {
+		if s.Number == firstSpan {
+			start = s.Compressed
+			foundFirst = true
+		}
+		if s.Number == lastSpan && idx+1 < len(spans) {
+			end = spans[idx+1].Compressed
+		}
+	}
+
+	if !foundFirst {
+		return 0, 0, fmt.Errorf("span %d not found in index", firstSpan)
+	}
+
+	return start, end, nil
+}
+
+// RangeHeader returns the HTTP Range header value for the compressed bytes
+// between start and end, as returned by CompressedRange. gztool numbers
+// compressed bytes from 1, so it needs the byte before start too.
+func RangeHeader(start, end int) string {
+	rangeHdr := fmt.Sprintf("bytes=%d-", start-1)
+	if end > 0 {
+		rangeHdr += fmt.Sprintf("%d", end)
+	}
+	return rangeHdr
 }
 
 func Spans(path string) ([]IndexSpan, error) {

@@ -204,7 +204,8 @@ func TestBuildIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	wd, _ := os.Getwd()
-	index, err := BuildIndex(wd, in)
+	var fileCount int64
+	index, err := BuildIndex(wd, in, &fileCount)
 	require.NoError(t, err)
 	require.NotNil(t, index)
 

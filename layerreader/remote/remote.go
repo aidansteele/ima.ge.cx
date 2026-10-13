@@ -32,8 +32,6 @@ import (
 func main() {
 	logging.Init()
 
-	rand.Seed(time.Now().UnixNano())
-
 	ctx := context.Background()
 
 	cfg, err := config.LoadDefaultConfig(ctx)
@@ -124,26 +122,34 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		return nil, fmt.Errorf("getting layer reader: %w", err)
 	}
 
+	defer raw.Close()
+
 	counter := &CountReader{Reader: raw}
 	var fileCount int64 = 0
 
 	countctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go d.countProgress(countctx, &counter.count, &fileCount, key)
+	progressDone := make(chan struct{})
+	go func() {
+		defer close(progressDone)
+		d.countProgress(countctx, &counter.count, &fileCount, key)
+	}()
 
-	dir, err := os.MkdirTemp("/tmp/", "targzi*")
+	// Lambda reuses /tmp across invocations, so remove the index files once uploaded.
+	dir, err := os.MkdirTemp("", "targzi*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
 	}
+	defer os.RemoveAll(dir)
 
 	index, err := targzi.BuildIndex(dir, counter, &fileCount)
 	if err != nil {
 		return nil, fmt.Errorf("building index: %w", err)
 	}
 
-	// TODO: there's a race condition here, but this should usually flush
-	// the "downloaded" progress to dynamodb before this lambda function returns
+	// Flush the final progress to DynamoDB before continuing.
 	cancel()
+	<-progressDone
 
 	prefix := fmt.Sprintf("layers/%s/", input.Layer)
 
@@ -187,20 +193,22 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 
 	return &layerreader.RemoteOutput{
 		Gzi: layerreader.Put{
-			Key:       *gziPut.Key,
-			VersionId: *gziPut.VersionID,
+			Key:       aws.ToString(gziPut.Key),
+			VersionId: aws.ToString(gziPut.VersionID),
 			Size:      gzfstat.Size(),
 		},
 		Tar: layerreader.Put{
-			Key:       *tarPut.Key,
-			VersionId: *tarPut.VersionID,
+			Key:       aws.ToString(tarPut.Key),
+			VersionId: aws.ToString(tarPut.VersionID),
 			Size:      ffstat.Size(),
 		},
 	}, nil
 }
 
+// countProgress writes the byte and file counters to DynamoDB every second
+// until ctx is cancelled, then writes them one final time.
 func (d *downloader) countProgress(ctx context.Context, byteCounter, fileCounter *int64, key bitypes.LayerProgressKey) {
-	update := func() {
+	update := func(ctx context.Context) {
 		byteCount := atomic.LoadInt64(byteCounter)
 		fileCount := atomic.LoadInt64(fileCounter)
 
@@ -214,21 +222,28 @@ func (d *downloader) countProgress(ctx context.Context, byteCounter, fileCounter
 			},
 		})
 		if err != nil {
-			panic(fmt.Sprintf("%+v", err))
+			// Progress is informational; a failed update must not fail the layer.
+			slog.WarnContext(ctx, "updating layer progress", "error", err)
 		}
 	}
 
 	// added some jitter to avoid request storms to ddb
-	time.Sleep(time.Second * time.Duration(rand.Float32()))
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Duration(rand.Int63n(int64(time.Second)))):
+	}
+
 	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			update()
+			// ctx is already cancelled here, so the final write needs a context that isn't.
+			update(context.WithoutCancel(ctx))
 			return
 		case <-tick.C:
-			update()
+			update(ctx)
 		}
 	}
 }

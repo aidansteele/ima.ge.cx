@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
@@ -16,10 +15,9 @@ import (
 )
 
 type TarExplorer struct {
-	s3          *s3.Client
-	downloader  *manager.Downloader
-	bucket      string
-	gzIndexPath string
+	s3         *s3.Client
+	downloader *manager.Downloader
+	bucket     string
 }
 
 func NewTarExplorer(s3 *s3.Client, bucket string) *TarExplorer {
@@ -31,31 +29,27 @@ func NewTarExplorer(s3 *s3.Client, bucket string) *TarExplorer {
 }
 
 func (te *TarExplorer) FileContents(ctx context.Context, key, file string) ([]byte, error) {
-	if te.gzIndexPath == "" {
-		indexFile, err := os.CreateTemp("", "index*")
-		if err != nil {
-			return nil, fmt.Errorf("making file for index: %w", err)
-		}
+	indexFile, err := os.CreateTemp("", "index*")
+	if err != nil {
+		return nil, fmt.Errorf("making file for index: %w", err)
+	}
+	defer os.Remove(indexFile.Name())
 
-		_, err = te.downloader.Download(ctx, indexFile, &s3.GetObjectInput{
-			Bucket: &te.bucket,
-			Key:    aws.String(fmt.Sprintf("%s/index.gzi", key)),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("downloading index file: %w", err)
-		}
-
-		err = indexFile.Close()
-		if err != nil {
-			return nil, fmt.Errorf("closing index file: %w", err)
-		}
-
-		te.gzIndexPath = indexFile.Name()
+	_, err = te.downloader.Download(ctx, indexFile, &s3.GetObjectInput{
+		Bucket: &te.bucket,
+		Key:    aws.String(fmt.Sprintf("%s/index.gzi", key)),
+	})
+	if err != nil {
+		indexFile.Close()
+		return nil, fmt.Errorf("downloading index file: %w", err)
 	}
 
-	// Escape single quotes for S3 Select SQL (S3 Select uses '' escaping, not backslash)
-	escapedFile := strings.ReplaceAll(file, "'", "''")
-	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Hdr.Name = '%s'", escapedFile)
+	err = indexFile.Close()
+	if err != nil {
+		return nil, fmt.Errorf("closing index file: %w", err)
+	}
+
+	query := "SELECT * FROM s3object s WHERE s.Hdr.Name = " + s3select.Quote(file)
 	entries, err := s3select.Select[Entry](ctx, te.s3, te.bucket, fmt.Sprintf("%s/files.json.gz", key), query)
 	if err != nil {
 		return nil, fmt.Errorf("querying file index: %w", err)
@@ -66,53 +60,34 @@ func (te *TarExplorer) FileContents(ctx context.Context, key, file string) ([]by
 	}
 	entry := entries[0]
 
-	if len(entry.Spans) == 0 {
-		return nil, fmt.Errorf("entry has no spans")
-	}
-
-	c := &http.Client{
-		//Transport: &transport{RoundTripper: http.DefaultTransport},
-	}
-	// TODO: This URL is hardcoded for testing - needs registry info to work properly
-	req, err := http.NewRequest("GET", "https://mcr.microsoft.com/v2/dotnet/sdk/blobs/sha256:a603fa5e3b4127f210503aaa6189abf6286ee5a73deeaab460f8f33ebc6b64e2", nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating HTTP request: %w", err)
-	}
-
-	spans, err := Spans(te.gzIndexPath)
+	spans, err := Spans(indexFile.Name())
 	if err != nil {
 		return nil, fmt.Errorf("reading spans: %w", err)
 	}
 
-	//span := IndexSpan{}
-	start := 0
-	end := 0
-	firstSpan := entry.Spans[0]
-	lastSpan := entry.Spans[len(entry.Spans)-1]
-	for idx, s := range spans {
-		if s.Number == firstSpan {
-			start = s.Compressed
-		}
-		if s.Number == lastSpan {
-			if idx+1 < len(spans) {
-				end = spans[idx+1].Compressed
-			}
-		}
+	start, end, err := CompressedRange(spans, entry.Spans)
+	if err != nil {
+		return nil, fmt.Errorf("finding compressed range: %w", err)
 	}
 
-	rangeHdr := fmt.Sprintf("bytes=%d-", start-1)
-	if end > 0 {
-		rangeHdr += fmt.Sprintf("%d", end)
+	// TODO: This URL is hardcoded for testing - needs registry info to work properly
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://mcr.microsoft.com/v2/dotnet/sdk/blobs/sha256:a603fa5e3b4127f210503aaa6189abf6286ee5a73deeaab460f8f33ebc6b64e2", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
-	req.Header.Set("Range", rangeHdr)
+	req.Header.Set("Range", RangeHeader(start, end))
 
-	resp, err := c.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching layer content: %w", err)
 	}
-
 	defer resp.Body.Close()
-	extracted, err := Extract(ctx, resp.Body, te.gzIndexPath, start, entry.Offset, int(entry.Hdr.Size))
+
+	if resp.StatusCode != http.StatusPartialContent {
+		return nil, fmt.Errorf("fetching layer content: unexpected status %s", resp.Status)
+	}
+
+	extracted, err := Extract(ctx, resp.Body, indexFile.Name(), start, entry.Offset, int(entry.Hdr.Size))
 	if err != nil {
 		return nil, fmt.Errorf("extracting: %w", err)
 	}
@@ -121,9 +96,7 @@ func (te *TarExplorer) FileContents(ctx context.Context, key, file string) ([]by
 }
 
 func (te *TarExplorer) ListDirectory(ctx context.Context, key, dir string) ([]Entry, error) {
-	// Escape single quotes for S3 Select SQL (S3 Select uses '' escaping, not backslash)
-	escapedDir := strings.ReplaceAll(dir, "'", "''")
-	query := fmt.Sprintf("SELECT * FROM s3object s WHERE s.Parent = '%s'", escapedDir)
+	query := "SELECT * FROM s3object s WHERE s.Parent = " + s3select.Quote(dir)
 	return s3select.Select[Entry](ctx, te.s3, te.bucket, fmt.Sprintf("%s/files.json.gz", key), query)
 }
 

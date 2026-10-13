@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -73,14 +72,14 @@ func (h *handler) Invoke(ctx context.Context, payload []byte) ([]byte, error) {
 	h.handler.ServeHTTP(w, r)
 
 	res := w.Result()
-	resBody, err := ioutil.ReadAll(res.Body)
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
 	resHeaders := map[string]string{}
 	for key, vals := range res.Header {
-		resHeaders[key] = vals[0]
+		resHeaders[key] = strings.Join(vals, ",")
 	}
 
 	b64 := base64.StdEncoding.EncodeToString(resBody)

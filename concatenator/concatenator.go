@@ -5,11 +5,12 @@ import (
 	"browseimage/layerreader"
 	"browseimage/logging"
 	"browseimage/targzi"
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -61,16 +62,11 @@ type concatenator struct {
 	bucket     string
 }
 
-type entryWithLayer struct {
-	targzi.Entry
-	Layer string
-}
-
 func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*concatenatorOutput, error) {
 	ctx = logging.WithRequestPayload(ctx, input)
 	slog.InfoContext(ctx, "handling concatenator request")
 
-	fileMap := map[string]*entryWithLayer{}
+	fileMap := map[string]*layerreader.EntryWithLayer{}
 
 	for _, hash := range input.Layers {
 		w := manager.NewWriteAtBuffer(nil)
@@ -87,47 +83,23 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 			return nil, fmt.Errorf("creating gzip reader: %w", err)
 		}
 
-		scan := bufio.NewScanner(gzr)
-		for scan.Scan() {
+		dec := json.NewDecoder(gzr)
+		for {
 			e := targzi.Entry{}
-			err = json.Unmarshal(scan.Bytes(), &e)
+			err = dec.Decode(&e)
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			if err != nil {
 				return nil, fmt.Errorf("unmarshalling entry: %w", err)
 			}
 
-			base := filepath.Base(e.Hdr.Name)
-			if base == layerreader.WhiteoutOpaqueDir {
-				deletes := []string{}
-				deletedDir := strings.TrimSuffix(e.Hdr.Name, layerreader.WhiteoutOpaqueDir)
-				slog.DebugContext(ctx, "processing opaque whiteout directory", "dir", deletedDir)
-				for key, entry := range fileMap {
-					// Only delete entries from previous layers, not from the current layer
-					if strings.HasPrefix(key, deletedDir) && entry.Layer != hash.String() {
-						deletes = append(deletes, key)
-					}
-				}
-				for _, del := range deletes {
-					delete(fileMap, del)
-					slog.DebugContext(ctx, "deleting recursively", "path", del)
-				}
-			} else if strings.HasPrefix(base, layerreader.WhiteoutPrefix) {
-				name := strings.TrimPrefix(base, layerreader.WhiteoutPrefix)
-				dir := filepath.Dir(e.Hdr.Name)
-				fullPath := filepath.Join(dir, name)
-				// Only delete if it's from a previous layer
-				if existing, ok := fileMap[fullPath]; ok && existing.Layer != hash.String() {
-					delete(fileMap, fullPath)
-					slog.DebugContext(ctx, "deleting whiteout file", "path", fullPath)
-				}
-			} else {
-				fileMap[e.Hdr.Name] = &entryWithLayer{Entry: e, Layer: hash.String()}
-			}
+			applyEntry(ctx, fileMap, e, hash.String())
 		}
 	}
 
-	arr := make([]*entryWithLayer, 0, len(fileMap))
+	arr := make([]*layerreader.EntryWithLayer, 0, len(fileMap))
 	for _, e := range fileMap {
-		e := e
 		arr = append(arr, e)
 	}
 
@@ -138,10 +110,13 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 	buf := &bytes.Buffer{}
 	gzw := gzip.NewWriter(buf)
 
+	// json.Encoder terminates each value with a newline, producing JSON Lines.
+	enc := json.NewEncoder(gzw)
 	for _, e := range arr {
-		j, _ := json.Marshal(e)
-		gzw.Write(j)
-		gzw.Write([]byte{'\n'})
+		err := enc.Encode(e)
+		if err != nil {
+			return nil, fmt.Errorf("writing combined index entry: %w", err)
+		}
 	}
 
 	err := gzw.Close()
@@ -159,7 +134,39 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 	}
 
 	return &concatenatorOutput{
-		Key:       *upload.Key,
-		VersionId: *upload.VersionID,
+		Key:       aws.ToString(upload.Key),
+		VersionId: aws.ToString(upload.VersionID),
 	}, nil
+}
+
+// applyEntry merges one entry from layer into fileMap, which holds the
+// entries of the layers below it keyed by path. Whiteouts only remove entries
+// from lower layers, never entries from the layer that contains them.
+func applyEntry(ctx context.Context, fileMap map[string]*layerreader.EntryWithLayer, e targzi.Entry, layer string) {
+	base := filepath.Base(e.Hdr.Name)
+
+	switch {
+	case base == layerreader.WhiteoutOpaqueDir:
+		// An opaque whiteout hides the directory's existing contents but keeps the directory.
+		dir := strings.TrimSuffix(e.Hdr.Name, layerreader.WhiteoutOpaqueDir)
+		slog.DebugContext(ctx, "processing opaque whiteout directory", "dir", dir)
+		for key, entry := range fileMap {
+			if key != dir && strings.HasPrefix(key, dir) && entry.Layer != layer {
+				delete(fileMap, key)
+				slog.DebugContext(ctx, "deleting recursively", "path", key)
+			}
+		}
+	case strings.HasPrefix(base, layerreader.WhiteoutPrefix):
+		// A whiteout removes a file, or a directory (keyed with a trailing
+		// slash) and everything beneath it.
+		target := filepath.Join(filepath.Dir(e.Hdr.Name), strings.TrimPrefix(base, layerreader.WhiteoutPrefix))
+		for key, entry := range fileMap {
+			if (key == target || strings.HasPrefix(key, target+"/")) && entry.Layer != layer {
+				delete(fileMap, key)
+				slog.DebugContext(ctx, "deleting whiteout path", "path", key)
+			}
+		}
+	default:
+		fileMap[e.Hdr.Name] = &layerreader.EntryWithLayer{Entry: e, Layer: layer}
+	}
 }

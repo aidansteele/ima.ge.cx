@@ -45,12 +45,12 @@ func (f *finalizer) handle(ctx context.Context, input *FinalizerInput) (*Finaliz
 		Digest: input.Payload.Digest,
 	}
 
-	status := "SUCCEEDED"
+	status := bitypes.ImageInfoStatusSucceeded
 	if input.Meta.Error != nil {
-		status = "FAILED"
+		status = bitypes.ImageInfoStatusFailed
 	}
 
-	duration := time.Now().Sub(input.Meta.StartTime)
+	duration := time.Since(input.Meta.StartTime)
 
 	_, err := f.dynamo.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:        &f.table,
@@ -62,7 +62,7 @@ func (f *finalizer) handle(ctx context.Context, input *FinalizerInput) (*Finaliz
 			"#duration": "Duration",
 		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":status":      &types.AttributeValueMemberS{Value: status},
+			":status":      &types.AttributeValueMemberS{Value: string(status)},
 			":duration":    &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", duration)},
 			":executionId": &types.AttributeValueMemberS{Value: input.Meta.ExecutionId},
 		},

@@ -44,6 +44,11 @@ func TestIndex(t *testing.T) {
 }
 
 func TestWipe(t *testing.T) {
+	// This deletes every item in $TABLE, so never run it as part of `go test ./...`.
+	if os.Getenv("WIPE_TABLE") != "1" {
+		t.Skip("set WIPE_TABLE=1 to delete every item in $TABLE")
+	}
+
 	ctx := context.Background()
 
 	cfg, err := config.LoadDefaultConfig(ctx)

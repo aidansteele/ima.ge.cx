@@ -12,10 +12,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
 func main() {
@@ -60,7 +61,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("getting image: %w", err)
 	}
@@ -74,7 +75,23 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 	var totalSize int64
 
 	for _, layer := range layers {
-		size, _ := layer.Size()
+		mediaType, err := layer.MediaType()
+		if err != nil {
+			return nil, fmt.Errorf("getting layer media type: %w", err)
+		}
+
+		// The layer reader indexes layers with gztool, which only understands gzip.
+		// Artifacts such as signatures and attestations have JSON "layers".
+		switch mediaType {
+		case types.DockerLayer, types.DockerForeignLayer, types.OCILayer, types.OCIRestrictedLayer:
+		default:
+			return nil, fmt.Errorf("unsupported layer media type %q: only gzip-compressed tar layers can be indexed", mediaType)
+		}
+
+		size, err := layer.Size()
+		if err != nil {
+			return nil, fmt.Errorf("getting layer size: %w", err)
+		}
 		totalSize += size
 
 		digest, err := layer.Digest()
@@ -104,10 +121,10 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 		TableName:        &ll.table,
 		Key:              key.Key(),
 		UpdateExpression: aws.String("SET TotalSize = :TotalSize, RawConfig = :RawConfig, Manifest = :Manifest"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":TotalSize": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", totalSize)},
-			":RawConfig": &types.AttributeValueMemberB{Value: rawConfig},
-			":Manifest":  &types.AttributeValueMemberB{Value: manifest},
+		ExpressionAttributeValues: map[string]dynamotypes.AttributeValue{
+			":TotalSize": &dynamotypes.AttributeValueMemberN{Value: fmt.Sprintf("%d", totalSize)},
+			":RawConfig": &dynamotypes.AttributeValueMemberB{Value: rawConfig},
+			":Manifest":  &dynamotypes.AttributeValueMemberB{Value: manifest},
 		},
 	})
 	if err != nil {
