@@ -6,7 +6,8 @@ const ApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.ima.ge.c
 async function fetchOk(url: string): Promise<Response> {
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+    const body = (await res.text()).trim();
+    throw new Error(`${body || res.statusText} (HTTP ${res.status})`);
   }
   return res;
 }

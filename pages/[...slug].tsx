@@ -1,7 +1,8 @@
 import type {NextPage} from 'next'
 import {useState} from 'react'
 import {useRouter} from "next/router";
-import {Code, Loader, Paper, SimpleGrid, Table, Tabs, Text} from "@mantine/core";
+import {Button, Code, CopyButton, Group, Loader, Paper, SimpleGrid, Table, Tabs, Text} from "@mantine/core";
+import {IconCheck, IconLink} from "@tabler/icons";
 import Head from "next/head";
 import {Prism} from "@mantine/prism";
 import {Layers} from "../components/layers";
@@ -11,6 +12,7 @@ import {ImageIndexingView} from "../components/imageIndexingView";
 import {ImageSelector} from "../components/imageSelector";
 import {EnvVars} from "../components/envVars";
 import {SiteShell} from "../components/siteShell";
+import {useHashPath} from "../src/useHashPath";
 
 function FocusedContent({image, digest, path}: { image: string, digest: string, path: string }) {
   const {data, isLoading, error} = useFileContents(image, digest, path);
@@ -21,19 +23,47 @@ function FocusedContent({image, digest, path}: { image: string, digest: string, 
     </Paper>
   }
 
+  let content;
   if (error) {
-    return <Text color="red">Failed to load {path}: {error.message}</Text>;
+    content = <Text color="red">Failed to load {path}: {error.message}</Text>;
+  } else if (isLoading) {
+    content = <Loader/>;
+  } else {
+    content = <Code block>{data}</Code>;
   }
 
-  if (isLoading) {
-    return <Loader/>
-  }
-
-  return <Code block>{data}</Code>;
+  return <>
+    <Group position="apart" my="xs" noWrap>
+      <Code>/{path}</Code>
+      <CopyButton value={window.location.href}>
+        {({copied, copy}) => <Button
+          size="xs"
+          variant="light"
+          color={copied ? "teal" : "blue"}
+          leftIcon={copied ? <IconCheck size={14}/> : <IconLink size={14}/>}
+          onClick={copy}
+        >
+          {copied ? "Copied" : "Copy link"}
+        </Button>}
+      </CopyButton>
+    </Group>
+    {content}
+  </>;
 }
 
+// Keeps the selected file's contents in view while scrolling through a long file tree.
+const stickyBelowHeader = {
+  position: 'sticky',
+  top: 'calc(var(--mantine-header-height, 90px) + 16px)',
+  alignSelf: 'start',
+  maxHeight: 'calc(100vh - var(--mantine-header-height, 90px) - 32px)',
+  overflow: 'auto',
+} as const;
+
 function ImageView({info, image, digest}: { info: ImageInfo, image: string, digest: string }) {
-  const [selectedFile, setSelectedFile] = useState("");
+  const [selectedFile, setSelectedFile] = useHashPath();
+  // The file the page was opened with, which is scrolled into view once its directory loads.
+  const [linkedFile] = useState(selectedFile);
 
   const rootDirent: DirectoryEntry = {
     id: `root-${digest}`,
@@ -65,11 +95,12 @@ function ImageView({info, image, digest}: { info: ImageInfo, image: string, dige
               </tr>
               </thead>
               <tbody>
-                <DirectoryNode image={image} digest={digest} parent={""} dirent={rootDirent} depth={0} startExpanded={true} setFocus={setSelectedFile}/>
+                <DirectoryNode image={image} digest={digest} parent={""} dirent={rootDirent} depth={0} startExpanded={true}
+                               focusedPath={selectedFile} scrollToPath={linkedFile} setFocus={setSelectedFile}/>
               </tbody>
             </Table>
           </div>
-          <div>
+          <div style={stickyBelowHeader}>
             <FocusedContent image={image} digest={digest} path={selectedFile}/>
           </div>
         </SimpleGrid>

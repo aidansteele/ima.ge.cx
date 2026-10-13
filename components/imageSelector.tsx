@@ -17,7 +17,8 @@ export function ImageSelector({image, digest}: { image: string, digest?: string 
   const onlyDigest = data?.Options?.length === 1 ? data.Options[0].Digest : undefined;
   useEffect(() => {
     if (onlyDigest && onlyDigest !== digest) {
-      router.replace(`/${image}@${onlyDigest}`);
+      // Keep the hash so that links to a file in a single-platform image work without a digest.
+      router.replace(`/${image}@${onlyDigest}${window.location.hash}`);
     }
   }, [onlyDigest, digest, image, router]);
 
@@ -44,6 +45,7 @@ export function ImageSelector({image, digest}: { image: string, digest?: string 
     placeholder={"Select a platform"}
     data={selectData}
     value={digest ?? null}
-    onChange={val => router.push(`/${image}@${val}`)}
+    // Keep the hash so the same file is shown for the other platform.
+    onChange={val => router.push(`/${image}@${val}${window.location.hash}`)}
   />
 }
