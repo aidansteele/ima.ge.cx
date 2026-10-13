@@ -79,6 +79,7 @@ func main() {
 	r.HandleFunc("/api/file", handleErrors(h.handleFileContents))
 	r.HandleFunc("/api/info", handleErrors(h.handleInfo))
 	r.HandleFunc("/api/lookup", handleErrors(h.handleLookup))
+	r.HandleFunc("/api/tags", handleErrors(h.handleTags))
 
 	r.Use(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -322,6 +323,30 @@ func (h *handler) lookupOptions(ctx context.Context, imageQuery string) ([]image
 			Variant:      cf.Variant,
 		},
 	}}, nil
+}
+
+type tagsOutput struct {
+	Error string   `json:",omitempty"`
+	Tags  []string `json:",omitempty"`
+}
+
+// handleTags lists the tags in an image's repository. Like handleLookup,
+// registry errors are reported in the body so the UI can show them.
+func (h *handler) handleTags(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	w.Header().Set("Cache-Control", "max-age=300")
+
+	ref, err := name.ParseReference(r.URL.Query().Get("image"))
+	if err != nil {
+		return writeJSON(w, http.StatusOK, tagsOutput{Error: err.Error()})
+	}
+
+	tags, err := remote.List(ref.Context(), h.remoteOptions(ctx)...)
+	if err != nil {
+		return writeJSON(w, http.StatusOK, tagsOutput{Error: err.Error()})
+	}
+
+	return writeJSON(w, http.StatusOK, tagsOutput{Tags: tags})
 }
 
 type LayerProgress struct {
