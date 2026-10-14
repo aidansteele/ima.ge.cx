@@ -1,7 +1,5 @@
-import type {NextPage} from 'next'
+import type {GetServerSideProps, NextPage} from 'next'
 import {useEffect, useState} from 'react'
-import {useRouter} from "next/router";
-import Head from "next/head";
 import Link from "next/link";
 import {Loader} from "@mantine/core";
 import {Prism} from "@mantine/prism";
@@ -16,6 +14,8 @@ import {FileViewer} from "../components/fileViewer";
 import {Layers} from "../components/layers";
 import {EnvVars} from "../components/envVars";
 import {ImageIndexingView} from "../components/imageIndexingView";
+import {SocialMetadata} from "../components/socialMetadata";
+import {imageDescription} from "../src/imageMetadata";
 
 const tabs = [
   {value: "files", label: "Files"},
@@ -112,18 +112,33 @@ function PlatformPicker({image}: { image: string }) {
   </Message>;
 }
 
-const ImagePage: NextPage = () => {
-  const router = useRouter();
-  if (!router.isReady) return null;
+interface ImagePageProps {
+  image: string;
+  digest: string;
+  path: string;
+  description: string;
+}
 
-  const slug = router.query.slug as string[];
-  const [image, digest] = slug.join("/").split('@');
-
+const ImagePage: NextPage<ImagePageProps> = ({image, digest, path, description}) => {
   return <div className="app">
-    <Head><title>{`${image} · ima.ge.cx`}</title></Head>
+    <SocialMetadata title={`${image}${digest ? ` @ ${digest.slice(0, 19)}…` : ""} · ima.ge.cx`}
+                    description={description} path={path} imageReference={image} digest={digest}/>
     <TopBar><ImageRef image={image} digest={digest}/></TopBar>
     {digest ? <ImageState image={image} digest={digest}/> : <PlatformPicker image={image}/>}
   </div>;
 }
+
+// Social crawlers don't execute the client-side API hooks. Include metadata in
+// the initial HTML, but leave the interactive workspace's loading flow intact.
+export const getServerSideProps: GetServerSideProps<ImagePageProps> = async ({params}) => {
+  const slug = params!.slug as string[];
+  const [image, digest = ""] = slug.join("/").split('@');
+  return {props: {
+    image,
+    digest,
+    path: `/${slug.map(encodeURIComponent).join("/")}`,
+    description: await imageDescription(image, digest),
+  }};
+};
 
 export default ImagePage

@@ -1,11 +1,11 @@
 import type {NextPage} from 'next'
 import {CSSProperties, FormEvent, useState} from "react";
-import Head from "next/head";
 import Link from "next/link";
 import {useRouter} from "next/router";
 import {Autocomplete, Button} from "@mantine/core";
 import {IconArrowRight, IconFileText, IconSearch, IconStack2, IconLink} from "@tabler/icons";
 import {TopBar} from "../components/topBar";
+import {SocialMetadata} from "../components/socialMetadata";
 import {colorFor} from "../components/layerChip";
 import {useImageOptions, useImageTags} from "../src/imageHooks";
 import {rankTagSuggestions, registryOf, splitTag} from "../src/tags";
@@ -95,7 +95,7 @@ const steps = [
 
 const Home: NextPage = () => {
   return <div className="home">
-    <Head><title>ima.ge.cx · See inside any container image</title></Head>
+    <SocialMetadata/>
     <TopBar beta/>
     <section className="hero">
       <h1>See inside any <span className="accent">container image</span></h1>

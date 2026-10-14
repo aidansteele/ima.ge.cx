@@ -51,7 +51,7 @@ export function entryFiles(e: DirectoryEntry) {
   return e.typ === TypeRegular ? 1 : e.dirFiles;
 }
 
-interface ApiResponseDirectoryEntry {
+export interface ApiResponseDirectoryEntry {
   Offset: number;
   Spans: number[];
   Parent: string;
