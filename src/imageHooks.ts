@@ -35,6 +35,20 @@ export interface DirectoryEntry {
   linkname: string;
   layer: string;
   mode: number;
+  // For directories: the total size and number of regular files beneath them.
+  dirSize: number;
+  dirFiles: number;
+}
+
+const TypeRegular = 48;
+
+// The bytes an entry contributes to its parent directory's total.
+export function entrySize(e: DirectoryEntry) {
+  return e.typ === TypeRegular ? e.size : e.dirSize;
+}
+
+export function entryFiles(e: DirectoryEntry) {
+  return e.typ === TypeRegular ? 1 : e.dirFiles;
 }
 
 interface ApiResponseDirectoryEntry {
@@ -42,6 +56,8 @@ interface ApiResponseDirectoryEntry {
   Spans: number[];
   Parent: string;
   Layer: string;
+  DirSize?: number;
+  DirFiles?: number;
   Hdr: {
     Typeflag: number;
     Name: string;
@@ -63,7 +79,11 @@ export function useDirectory(image: string, digest: string, path: string, load: 
     linkname: src.Hdr.Linkname,
     layer: src.Layer,
     mode: src.Hdr.Mode,
-  }));
+    dirSize: src.DirSize ?? 0,
+    dirFiles: src.DirFiles ?? 0,
+  }))
+    // The root directory lists itself.
+    .filter(e => e.path !== path);
 
   return {dirents, error, isLoading};
 }

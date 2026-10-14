@@ -233,6 +233,9 @@ code { font-family: var(--mono); }
 }
 .tree-target { color: var(--faint); }
 .tree-size { color: var(--faint); font-size: 12px; width: 64px; text-align: right; flex: none; }
+.tree-bar { width: 32px; height: 4px; border-radius: 2px; background: var(--surface-2); flex: none; overflow: hidden; }
+.tree-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--faint); }
+.tree-row.selected .tree-bar > span, .tree-row:hover .tree-bar > span { background: var(--accent); }
 
 .tree-status {
   display: flex;

@@ -32,7 +32,7 @@ function Workspace({info, image, digest}: { info: ImageInfo, image: string, dige
   const [tab, setTab] = useState<Tab>("files");
 
   return <>
-    <SummaryStrip info={info} digest={digest}/>
+    <SummaryStrip info={info} image={image} digest={digest}/>
     <nav className="tabs" role="tablist">
       {tabs.map(t => <button key={t.value} role="tab" aria-selected={tab === t.value}
                              className={tab === t.value ? "tab active" : "tab"} onClick={() => setTab(t.value)}>

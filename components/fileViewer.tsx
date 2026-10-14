@@ -71,7 +71,10 @@ export function FileViewer({image, digest, path, onSelect}: { image: string, dig
   } else if (!entry) {
     body = <Empty icon={<IconFileUnknown size={36}/>} title="Not in this image">/{path} doesn&apos;t exist in this image.</Empty>;
   } else if (entry.typ === TypeDirectory) {
-    body = <Empty icon={<IconFolder size={36}/>} title="This is a directory">Its contents are expanded in the tree.</Empty>;
+    body = <Empty icon={<IconFolder size={36}/>} title="This is a directory">
+      {entry.dirFiles ? `${formatBytes(entry.dirSize, 1)} in ${entry.dirFiles.toLocaleString()} files. ` : "It contains no files. "}
+      Its contents are expanded in the tree.
+    </Empty>;
   } else if (entry.typ === TypeSymlink) {
     const target = resolveLink(path, entry.linkname);
     body = <Empty icon={<IconLink size={36}/>} title="Symbolic link">
@@ -115,7 +118,7 @@ export function FileViewer({image, digest, path, onSelect}: { image: string, dig
       </div>
     </div>
     {entry && <div className="viewer-meta">
-      {entry.typ !== TypeDirectory && <span>{formatBytes(entry.size)}</span>}
+      <span>{formatBytes(entry.typ === TypeDirectory ? entry.dirSize : entry.size, 1)}</span>
       <span>from layer <LayerChip digest={entry.layer}/></span>
       <span>mode {(entry.mode & 0o7777).toString(8).padStart(4, "0")}</span>
     </div>}

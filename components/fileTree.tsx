@@ -2,7 +2,7 @@ import {CSSProperties, MouseEvent, useEffect, useRef, useState} from "react";
 import {Loader} from "@mantine/core";
 import {IconChevronRight, IconFile, IconFolder, IconLink} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
-import {DirectoryEntry, useDirectory} from "../src/imageHooks";
+import {DirectoryEntry, entrySize, useDirectory} from "../src/imageHooks";
 import {hashFromPath} from "../src/useHashPath";
 import {LayerChip} from "./layerChip";
 
@@ -54,19 +54,34 @@ function DirectoryChildren(props: TreeProps & { dir: string, depth: number }) {
     return <div className="tree-status" style={indent(depth)}>Empty directory</div>;
   }
 
+  // Each entry's bar shows its share of this directory's total size.
+  const total = dirents.reduce((n, e) => n + entrySize(e), 0);
   // Directories first, each group in the index's name order.
   const sorted = [...dirents].sort((a, b) => Number(b.typ === TypeDirectory) - Number(a.typ === TypeDirectory));
 
   return <>
     {sorted.map(child => child.typ === TypeDirectory ?
-      <DirectoryRow {...props} key={child.id} entry={child}/> :
-      <FileRow {...props} key={child.id} entry={child}/>
+      <DirectoryRow {...props} key={child.id} entry={child} share={total ? entrySize(child) / total : 0}/> :
+      <FileRow {...props} key={child.id} entry={child} share={total ? entrySize(child) / total : 0}/>
     )}
   </>;
 }
 
-function DirectoryRow(props: TreeProps & { dir: string, depth: number, entry: DirectoryEntry }) {
-  const {entry, dir, depth, focusedPath} = props;
+type RowProps = TreeProps & { dir: string, depth: number, entry: DirectoryEntry, share: number };
+
+function Size({entry, share}: { entry: DirectoryEntry, share: number }) {
+  const size = entrySize(entry);
+  const title = entry.typ === TypeDirectory ? `${size.toLocaleString()} bytes in ${entry.dirFiles.toLocaleString()} files` : `${size.toLocaleString()} bytes`;
+  return <>
+    <span className="tree-size" title={title}>{entry.typ === TypeRegular || entry.typ === TypeDirectory ? formatBytes(size) : ""}</span>
+    <span className="tree-bar" title={`${(share * 100).toFixed(1)}% of the parent directory`}>
+      {share > 0 && <span style={{width: `${Math.max(4, share * 100)}%`}}/>}
+    </span>
+  </>;
+}
+
+function DirectoryRow(props: RowProps) {
+  const {entry, dir, depth, focusedPath, share} = props;
   const containsFocus = within(focusedPath, entry.path);
   const [expanded, setExpanded] = useState(containsFocus);
 
@@ -81,14 +96,14 @@ function DirectoryRow(props: TreeProps & { dir: string, depth: number, entry: Di
       <IconChevronRight size={14} className={`tree-chevron${expanded ? " open" : ""}`}/>
       <IconFolder size={16} className="tree-icon folder"/>
       <span className="tree-name">{displayName(entry.path, dir)}</span>
-      <span className="tree-size"/>
+      <Size entry={entry} share={share}/>
       <LayerChip digest={entry.layer}/>
     </button>
     {expanded && <DirectoryChildren {...props} dir={entry.path} depth={depth + 1}/>}
   </>;
 }
 
-function FileRow({entry, dir, depth, focusedPath, scrollToPath, onSelect}: TreeProps & { dir: string, depth: number, entry: DirectoryEntry }) {
+function FileRow({entry, dir, depth, focusedPath, scrollToPath, onSelect, share}: RowProps) {
   const row = useRef<HTMLAnchorElement>(null);
   const selected = entry.path === focusedPath;
   const symlink = entry.typ === TypeSymlink;
@@ -112,7 +127,7 @@ function FileRow({entry, dir, depth, focusedPath, scrollToPath, onSelect}: TreeP
       {displayName(entry.path, dir)}
       {entry.linkname && <span className="tree-target"> → {entry.linkname}</span>}
     </span>
-    <span className="tree-size">{entry.typ === TypeRegular ? formatBytes(entry.size) : ""}</span>
+    <Size entry={entry} share={share}/>
     <LayerChip digest={entry.layer}/>
   </a>;
 }

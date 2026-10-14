@@ -1,7 +1,7 @@
 import {ActionIcon, CopyButton, Tooltip} from "@mantine/core";
 import {IconBox, IconCheck, IconCopy, IconCpu, IconFiles, IconFingerprint, IconStack2} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
-import {ImageInfo} from "../src/imageHooks";
+import {entryFiles, entrySize, ImageInfo, useDirectory} from "../src/imageHooks";
 
 const relativeTime = new Intl.RelativeTimeFormat(undefined, {numeric: "auto"});
 
@@ -21,15 +21,18 @@ function Stat({icon, value, label}: { icon: JSX.Element, value: string, label: s
   </div>;
 }
 
-export function SummaryStrip({info, digest}: { info: ImageInfo, digest: string }) {
+export function SummaryStrip({info, image, digest}: { info: ImageInfo, image: string, digest: string }) {
   const config = info.Config;
   const platform = [config?.os, config?.architecture, config?.variant].filter(Boolean).join("/") || "unknown";
-  const files = (info.Progresses ?? []).reduce((n, p) => n + p.CompletedFiles, 0);
+  // The file tree lists the root too, so this reuses its cached response.
+  const root = useDirectory(image, digest, "/", true).dirents;
+  const size = root.reduce((n, e) => n + entrySize(e), 0);
+  const files = root.reduce((n, e) => n + entryFiles(e), 0);
 
   return <div className="summary">
     <Stat icon={<IconBox size={20}/>} value={formatBytes(info.TotalSize ?? 0, 1)} label="compressed size"/>
+    {size > 0 && <Stat icon={<IconFiles size={20}/>} value={formatBytes(size, 1)} label={`in ${files.toLocaleString()} files`}/>}
     <Stat icon={<IconStack2 size={20}/>} value={String(info.Manifest?.layers?.length ?? 0)} label="layers"/>
-    {files > 0 && <Stat icon={<IconFiles size={20}/>} value={files.toLocaleString()} label="entries across layers"/>}
     <Stat icon={<IconCpu size={20}/>} value={platform} label="platform"/>
     <div className="stat">
       <span className="status-dot"/>
