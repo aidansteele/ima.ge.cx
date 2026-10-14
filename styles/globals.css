@@ -751,3 +751,16 @@ li:last-child > .step::before { bottom: 50%; }
   .layers { overflow: visible; }
   .workspace > .empty { overflow: visible; }
 }
+
+/* Reading on a phone uses the page scroll, not a small editor below fixed metadata. */
+@media (max-width: 760px) {
+  .app:has(.show-viewer) { height: auto; min-height: 100dvh; overflow: visible; }
+  .show-viewer { height: auto; }
+  .show-viewer .viewer-pane { flex: none; overflow: visible; }
+  .show-viewer .viewer { height: auto; }
+  .show-viewer .viewer-header { position: static; }
+  .show-viewer .viewer-body { flex: none; overflow: visible; }
+  .show-viewer .code-view { height: auto; }
+  .show-viewer .code-host { flex: none; }
+  .show-viewer .cm-editor { height: auto; }
+}
