@@ -60,27 +60,26 @@ function Search() {
   };
 
   return <form className="search" onSubmit={onSubmit}>
-    <Autocomplete
-      size="xl"
-      radius="lg"
-      autoFocus
-      aria-label="Image"
-      icon={<IconSearch size={22}/>}
-      placeholder="ubuntu:24.04 or ghcr.io/org/app"
-      value={value}
-      onChange={setValue}
-      data={suggestions}
-      filter={() => true}
-      limit={8}
-      onItemSubmit={item => go(item.value)}
-      rightSectionWidth={140}
-      rightSection={<Button type="submit" radius="md" rightIcon={<IconArrowRight size={16}/>}>Inspect</Button>}
-      styles={{
-        input: {fontFamily: "var(--mono)", fontSize: 18},
-        dropdown: {background: "var(--surface)", borderColor: "var(--border)", padding: 6},
-        item: {fontFamily: "var(--mono)", fontSize: 14, padding: "8px 14px", borderRadius: 8},
-      }}
-    />
+    <div className="search-field">
+      <Autocomplete
+        size="xl"
+        radius="lg"
+        aria-label="Image"
+        icon={<IconSearch size={22}/>}
+        placeholder="ubuntu:24.04 or ghcr.io/org/app"
+        value={value}
+        onChange={setValue}
+        data={suggestions}
+        filter={() => true}
+        limit={8}
+        onItemSubmit={item => go(item.value)}
+        styles={{
+          dropdown: {background: "var(--surface)", borderColor: "var(--border)", padding: 6},
+          item: {fontFamily: "var(--mono)", fontSize: 14, padding: "8px 14px", borderRadius: 8},
+        }}
+      />
+      <Button className="search-submit" type="submit" radius="md" rightIcon={<IconArrowRight size={16}/>}>Inspect</Button>
+    </div>
     <div className="search-hint">
       {wantsTags && data?.Tags ? <><code>{repo}</code> has {data.Tags.length.toLocaleString()} tags</> :
         <>Or put any image in the address bar: <code>ima.ge.cx/redis:7</code></>}

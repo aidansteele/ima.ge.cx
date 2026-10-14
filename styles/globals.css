@@ -28,6 +28,7 @@ code { font-family: var(--mono); }
 
 .app {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -44,6 +45,7 @@ code { font-family: var(--mono); }
 .pane {
   overflow: auto;
   min-height: 0;
+  min-width: 0;
 }
 
 /* Top bar */
@@ -120,6 +122,8 @@ code { font-family: var(--mono); }
 }
 .image-ref-repo svg { color: var(--muted); flex: none; }
 .image-ref-sep { color: var(--faint); font-family: var(--mono); }
+.image-tag { width: 190px; }
+.image-platform { width: 210px; }
 
 /* Summary strip */
 
@@ -190,9 +194,11 @@ code { font-family: var(--mono); }
 
 .files {
   display: grid;
-  grid-template-columns: minmax(320px, 30%) 1fr;
+  grid-template-columns: minmax(320px, 30%) minmax(0, 1fr);
   min-height: 0;
 }
+
+.file-navigation { display: none; }
 
 .tree-pane {
   border-right: 1px solid var(--border-soft);
@@ -349,7 +355,7 @@ code { font-family: var(--mono); }
 
 .layers {
   display: grid;
-  grid-template-columns: minmax(480px, 48%) 1fr;
+  grid-template-columns: minmax(480px, 48%) minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -557,7 +563,15 @@ li:last-child > .step::before { bottom: 50%; }
 .lede { color: var(--muted); font-size: 18px; margin: 18px 0 36px; }
 
 .search { text-align: left; }
-.search .mantine-Autocomplete-input { border-color: var(--border); background: var(--surface); }
+.search-field { position: relative; }
+.search-submit { position: absolute; right: 12px; top: 12px; }
+.search .mantine-Autocomplete-input {
+  border-color: var(--border);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 18px;
+  padding-right: 140px;
+}
 .search .mantine-Autocomplete-input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .search-hint { margin-top: 12px; color: var(--muted); font-size: 13px; text-align: center; }
 .search-hint code { color: var(--text); }
@@ -623,3 +637,117 @@ li:last-child > .step::before { bottom: 50%; }
 }
 .footer a { color: var(--muted); }
 .footer a:hover { color: var(--text); }
+
+/* Tablets: keep the image controls and summary accessible without squeezing them. */
+@media (max-width: 1100px) {
+  .topbar { height: auto; min-height: 56px; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
+  .topbar > .icon-link { margin-left: auto; }
+  .topbar-center { order: 1; flex-basis: 100%; }
+  .topbar-center:empty { display: none; }
+  .image-ref { width: 100%; }
+  .image-ref-repo { flex: 1; min-width: 0; max-width: none; }
+  .summary { overflow-x: auto; padding: 10px 16px; }
+  .stat { flex: none; padding-right: 16px; margin-right: 0; }
+  .summary-digest { flex: none; }
+  .examples { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .layers { display: flex; flex-direction: column; overflow: auto; }
+  .timeline { flex: none; max-height: 35vh; border-right: none; border-bottom: 1px solid var(--border-soft); }
+  .step-detail { flex: none; overflow: visible; }
+}
+
+/* Phones: one file pane at a time, with the tree kept mounted to preserve its place. */
+@media (max-width: 760px) {
+  .topbar { padding: 6px 12px 10px; }
+  .wordmark, .icon-link { min-height: 40px; }
+  .icon-link { align-items: center; justify-content: center; min-width: 44px; }
+  .image-ref { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+  .image-ref-repo { grid-column: 1 / -1; height: auto; min-height: 28px; border: none; padding: 0; }
+  .image-ref-sep { display: none; }
+  .image-tag, .image-platform { width: auto; min-width: 0; }
+  .image-ref input { min-height: 44px; font-size: 16px; }
+  .stat { gap: 8px; }
+  .stat > svg { width: 16px; }
+  .tabs { padding: 0 4px; gap: 0; overflow-x: auto; }
+  .tab { flex: 1; padding: 12px 10px; }
+
+  .files { display: flex; flex-direction: column; }
+  .file-navigation { display: flex; flex: none; border-bottom: 1px solid var(--border-soft); }
+  .file-navigation button {
+    flex: 1;
+    min-height: 44px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  .file-navigation button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+  .file-navigation button:disabled { opacity: 0.4; cursor: default; }
+  .files > .pane { flex: 1; }
+  .show-tree > .viewer-pane, .show-viewer > .tree-pane { display: none; }
+  .tree-pane { border-right: none; }
+  .tree-row { height: 44px; }
+  .tree-row > .layer-chip { display: none; }
+  .viewer-header { flex-wrap: wrap; gap: 8px; padding: 12px 12px 8px; }
+  .breadcrumb { flex-basis: 100%; overflow-x: auto; text-overflow: clip; }
+  .viewer-actions { width: 100%; }
+  .viewer-actions button { flex: 1; min-height: 44px; }
+  .viewer-meta { flex-wrap: wrap; gap: 8px; padding: 0 12px 10px; }
+  .viewer-meta > span + span::before { display: none; }
+  .viewer-body { padding: 0 12px 12px; }
+  .code-toolbar { flex-wrap: wrap; gap: 4px; }
+  .code-language { width: 100%; }
+  .code-hint { display: none; }
+  .code-toolbar button { min-height: 44px; flex: 1; }
+  .empty { padding: 32px 16px; max-width: 100%; }
+  .workspace > .empty { max-height: 100%; overflow: auto; justify-content: flex-start; }
+  .empty-body { max-width: 100%; overflow-wrap: anywhere; }
+  .platforms { width: 100%; }
+  .platform { gap: 12px; text-align: left; overflow-wrap: anywhere; }
+  .platform code { flex: none; }
+
+  .timeline { padding: 8px; }
+  .step { grid-template-columns: 18px 64px minmax(0, 1fr) 60px; gap: 6px; min-height: 60px; }
+  .step.meta { min-height: 44px; }
+  .step-digest, .step-bar { display: none; }
+  .step-detail, .page-section { padding: 16px; }
+  .step-detail h2 { flex-wrap: wrap; font-size: 16px; }
+  .command { flex-direction: column; }
+  .command pre { max-width: 100%; }
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .facts dd { margin-bottom: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .facts pre { white-space: pre-wrap; }
+  .section-header { align-items: stretch; flex-direction: column; gap: 12px; }
+  .section-header > * { max-width: 100%; }
+  .page-section input { font-size: 16px; min-height: 44px; }
+  .env-row { grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; padding: 12px; }
+  .env-key { overflow-wrap: anywhere; }
+  .env-val { grid-column: 1; grid-row: 2; }
+  .env-row > button { grid-column: 2; grid-row: 1 / 3; width: 44px; height: 44px; }
+  .indexing { padding: 16px 12px; min-height: 0; }
+  .indexing-card { width: 100%; padding: 20px 16px; height: fit-content; }
+  .indexing-title { flex-wrap: wrap; }
+  .indexing-title code { overflow-wrap: anywhere; min-width: 0; }
+  .indexing-layer { grid-template-columns: 76px 68px minmax(0, 1fr); gap: 8px; }
+
+  .hero { padding: 40px 16px 24px; }
+  .hero h1 { font-size: clamp(32px, 8vw, 48px); }
+  .lede { font-size: 16px; margin: 20px 0 24px; }
+  .search .mantine-Autocomplete-input { font-size: 16px; padding-right: 12px; }
+  .search-submit { position: static; width: 100%; min-height: 44px; margin-top: 8px; }
+  .search-hint { overflow-wrap: anywhere; }
+  .home-section { padding: 20px 16px; }
+  .examples, .how { grid-template-columns: minmax(0, 1fr); }
+  .how { gap: 24px; }
+  .footer { flex-wrap: wrap; padding: 24px 16px; }
+}
+
+/* Short phones and landscape need page scrolling as well as pane scrolling. */
+@media (max-width: 1100px) and (max-height: 600px) {
+  .app { height: auto; min-height: 100dvh; overflow: visible; }
+  .files { height: 600px; }
+  .layers { overflow: visible; }
+  .workspace > .empty { overflow: visible; }
+}

@@ -49,7 +49,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
     <Tooltip label={tagFailed} disabled={!tagFailed} withinPortal>
       <Select
         aria-label="Tag"
-        style={{width: 190}}
+        className="image-tag"
         styles={compactSelect}
         placeholder={tagFailed ? "tags unavailable" : tagData ? "tag" : "loading tags…"}
         searchable
@@ -67,7 +67,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
     <Tooltip label={platformFailed} disabled={!platformFailed} withinPortal>
       <Select
         aria-label="Platform"
-        style={{width: 210}}
+        className="image-platform"
         styles={compactSelect}
         placeholder={platformFailed ? "lookup failed" : options ? "platform" : "loading…"}
         data={platforms}

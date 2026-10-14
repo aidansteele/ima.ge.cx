@@ -1,5 +1,5 @@
 import type {NextPage} from 'next'
-import {useState} from 'react'
+import {useEffect, useState} from 'react'
 import {useRouter} from "next/router";
 import Head from "next/head";
 import Link from "next/link";
@@ -30,6 +30,14 @@ function Workspace({info, image, digest}: { info: ImageInfo, image: string, dige
   // The file the page was opened with, which is scrolled into view once its directory loads.
   const [linkedPath] = useState(selectedPath);
   const [tab, setTab] = useState<Tab>("files");
+  const [showTree, setShowTree] = useState(!selectedPath);
+
+  // Shared links and browser history open the viewer on narrow screens.
+  useEffect(() => setShowTree(!selectedPath), [selectedPath]);
+  const selectFile = (path: string) => {
+    setSelectedPath(path);
+    setShowTree(false);
+  };
 
   return <>
     <SummaryStrip info={info} image={image} digest={digest}/>
@@ -40,12 +48,16 @@ function Workspace({info, image, digest}: { info: ImageInfo, image: string, dige
       </button>)}
     </nav>
     <main className="workspace">
-      {tab === "files" && <div className="files">
+      {tab === "files" && <div className={`files ${showTree ? "show-tree" : "show-viewer"}`}>
+        <nav className="file-navigation" aria-label="File browser">
+          <button aria-pressed={showTree} onClick={() => setShowTree(true)}>Browse files</button>
+          <button aria-pressed={!showTree} disabled={!selectedPath} onClick={() => setShowTree(false)}>View file</button>
+        </nav>
         <aside className="pane tree-pane">
-          <FileTree image={image} digest={digest} focusedPath={selectedPath} scrollToPath={linkedPath} onSelect={setSelectedPath}/>
+          <FileTree image={image} digest={digest} focusedPath={selectedPath} scrollToPath={linkedPath} onSelect={selectFile}/>
         </aside>
         <section className="pane viewer-pane">
-          <FileViewer image={image} digest={digest} path={selectedPath} onSelect={setSelectedPath}/>
+          <FileViewer image={image} digest={digest} path={selectedPath} onSelect={selectFile}/>
         </section>
       </div>}
       {tab === "layers" && <Layers info={info}/>}
