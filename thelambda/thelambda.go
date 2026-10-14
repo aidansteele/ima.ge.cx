@@ -78,6 +78,7 @@ func main() {
 	r.HandleFunc("/api/dir", handleErrors(h.handleListDirectory))
 	r.HandleFunc("/api/file", handleErrors(h.handleFileContents))
 	r.HandleFunc("/api/info", handleErrors(h.handleInfo))
+	r.HandleFunc("/api/metadata", handleErrors(h.handleMetadata))
 	r.HandleFunc("/api/lookup", handleErrors(h.handleLookup))
 	r.HandleFunc("/api/tags", handleErrors(h.handleTags))
 
@@ -447,6 +448,15 @@ func (h *handler) handleStartExecution(key *bitypes.ImageInfoKey, w http.Respons
 }
 
 func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) error {
+	return h.imageInfo(w, r, true)
+}
+
+// Social previews may read an existing index, but must not start indexing.
+func (h *handler) handleMetadata(w http.ResponseWriter, r *http.Request) error {
+	return h.imageInfo(w, r, false)
+}
+
+func (h *handler) imageInfo(w http.ResponseWriter, r *http.Request, startIndexing bool) error {
 	ctx := r.Context()
 
 	repo, ref, err := parseImageQuery(r.URL.Query())
@@ -506,6 +516,10 @@ func (h *handler) handleInfo(w http.ResponseWriter, r *http.Request) error {
 
 	// image was not in dynamodb
 	if imageInfo.Digest == "" {
+		if !startIndexing {
+			w.Header().Set("Cache-Control", "no-store")
+			return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
+		}
 		return h.handleStartExecution(&bitypes.ImageInfoKey{Repo: repo, Digest: digest}, w, r)
 	}
 
