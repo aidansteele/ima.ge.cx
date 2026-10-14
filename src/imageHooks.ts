@@ -19,9 +19,12 @@ function apiUrl(endpoint: string, params: Record<string, string>) {
   return `${ApiBaseUrl}${endpoint}?${new URLSearchParams(params)}`;
 }
 
-export function useFileContents(image: string, digest: string, path: string) {
-  const key = apiUrl('file', {image, digest, path});
-  return useSWRImmutable<string, Error>(path === "" ? null : key, fetchText);
+export function fileUrl(image: string, digest: string, path: string) {
+  return apiUrl('file', {image, digest, path});
+}
+
+export function useFileContents(image: string, digest: string, path: string, enabled = true) {
+  return useSWRImmutable<string, Error>(enabled && path !== "" ? fileUrl(image, digest, path) : null, fetchText);
 }
 
 export interface DirectoryEntry {
@@ -31,6 +34,7 @@ export interface DirectoryEntry {
   typ: number;
   linkname: string;
   layer: string;
+  mode: number;
 }
 
 interface ApiResponseDirectoryEntry {
@@ -43,6 +47,7 @@ interface ApiResponseDirectoryEntry {
     Name: string;
     Linkname: string;
     Size: number;
+    Mode: number;
   };
 }
 
@@ -57,6 +62,7 @@ export function useDirectory(image: string, digest: string, path: string, load: 
     typ: src.Hdr.Typeflag,
     linkname: src.Hdr.Linkname,
     layer: src.Layer,
+    mode: src.Hdr.Mode,
   }));
 
   return {dirents, error, isLoading};
@@ -81,6 +87,9 @@ export interface HistoryEntry {
 
 // The image config JSON, see https://github.com/opencontainers/image-spec/blob/main/config.md
 export interface ImageConfig {
+  architecture?: string;
+  os?: string;
+  variant?: string;
   config?: {
     Env?: string[] | null;
   };
@@ -97,6 +106,7 @@ export interface ImageManifest {
 
 export interface ImageInfo {
   Status: ImageInfoStatus;
+  Retrieved?: string;
   Progresses?: LayerProgress[];
   TotalSize?: number;
   CompletedSize?: number;
@@ -140,8 +150,7 @@ interface ImageTagsResponse {
   Error?: string;
 }
 
-export function useImageTags(repo: string) {
-  const key = apiUrl('tags', {image: repo});
+export function useImageTags(repo: string | null) {
   // Tags change rarely, and large repositories have thousands of them.
-  return useSWRImmutable<ImageTagsResponse, Error>(key, fetchJson);
+  return useSWRImmutable<ImageTagsResponse, Error>(repo ? apiUrl('tags', {image: repo}) : null, fetchJson);
 }

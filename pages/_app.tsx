@@ -1,27 +1,37 @@
 import '../styles/globals.css'
-import type { AppProps } from 'next/app';
+import type {AppProps} from 'next/app';
 import Head from 'next/head';
-import { MantineProvider } from '@mantine/core';
+import {MantineProvider} from '@mantine/core';
 import {setupRUM} from "../src/cwRum";
 
 setupRUM();
 
 export default function App(props: AppProps) {
-  const { Component, pageProps } = props;
+  const {Component, pageProps} = props;
 
   return (
     <>
       <Head>
         <title>ima.ge.cx</title>
-        <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width" />
+        <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width"/>
+        <meta name="theme-color" content="#0b0d12"/>
       </Head>
 
       <MantineProvider
         withGlobalStyles
         withNormalizeCSS
         theme={{
-          /** Put your mantine theme override here */
-          colorScheme: 'light',
+          colorScheme: 'dark',
+          primaryColor: 'indigo',
+          primaryShade: {light: 6, dark: 5},
+          defaultRadius: 'md',
+          fontFamily: 'var(--sans)',
+          fontFamilyMonospace: 'var(--mono)',
+          headings: {fontFamily: 'var(--sans)'},
+          // A cooler, deeper dark palette than Mantine's default.
+          colors: {
+            dark: ['#e6e8ee', '#b7bdcc', '#8b93a7', '#5c6478', '#2a3040', '#1c212c', '#141821', '#0b0d12', '#08090d', '#050608'],
+          },
         }}
       >
         <Component {...pageProps} />
