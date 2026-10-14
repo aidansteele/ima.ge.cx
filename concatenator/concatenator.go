@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"browseimage/bitypes"
 	"browseimage/layerreader"
 	"browseimage/logging"
@@ -98,6 +99,8 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 		}
 	}
 
+	addDirectorySizes(fileMap)
+
 	arr := make([]*layerreader.EntryWithLayer, 0, len(fileMap))
 	for _, e := range fileMap {
 		arr = append(arr, e)
@@ -168,5 +171,35 @@ func applyEntry(ctx context.Context, fileMap map[string]*layerreader.EntryWithLa
 		}
 	default:
 		fileMap[e.Hdr.Name] = &layerreader.EntryWithLayer{Entry: e, Layer: layer}
+	}
+}
+
+// addDirectorySizes sets each directory's DirSize and DirFiles to the totals
+// of the regular files beneath it. Directory names end with "/", and fileMap
+// already reflects whiteouts, so deleted files aren't counted.
+func addDirectorySizes(fileMap map[string]*layerreader.EntryWithLayer) {
+	type total struct{ size, files int64 }
+	totals := map[string]*total{}
+
+	for name, e := range fileMap {
+		if e.Hdr.Typeflag != tar.TypeReg && e.Hdr.Typeflag != tar.TypeRegA {
+			continue
+		}
+		for i := strings.LastIndex(name, "/"); i >= 0; i = strings.LastIndex(name[:i], "/") {
+			dir := name[:i+1]
+			t := totals[dir]
+			if t == nil {
+				t = &total{}
+				totals[dir] = t
+			}
+			t.size += e.Hdr.Size
+			t.files++
+		}
+	}
+
+	for dir, t := range totals {
+		if e, ok := fileMap[dir]; ok {
+			e.DirSize, e.DirFiles = t.size, t.files
+		}
 	}
 }

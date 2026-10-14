@@ -17,6 +17,10 @@ const WhiteoutOpaqueDir = ".wh..wh..opq"
 type EntryWithLayer struct {
 	targzi.Entry
 	Layer string
+	// For directories: the total size and number of the regular files
+	// beneath them in the final filesystem.
+	DirSize  int64 `json:",omitempty"`
+	DirFiles int64 `json:",omitempty"`
 }
 
 type LayerReader interface {
