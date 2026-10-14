@@ -5,8 +5,7 @@ import {formatBytes} from "../src/formatBytes";
 import {fileUrl, useDirectory, useFileContents} from "../src/imageHooks";
 import {LayerChip} from "./layerChip";
 import {TypeDirectory, TypeSymlink} from "./fileTree";
-
-const MaxLines = 5000;
+import {CodeView} from "./codeView";
 
 function parentDir(path: string) {
   const i = path.replace(/\/$/, "").lastIndexOf("/");
@@ -45,20 +44,6 @@ function Empty({icon, title, children}: { icon: JSX.Element, title: string, chil
     <div className="empty-title">{title}</div>
     {children && <div className="empty-body">{children}</div>}
   </div>;
-}
-
-function CodeView({text}: { text: string }) {
-  const lines = text.replace(/\n$/, "").split("\n");
-  const shown = lines.slice(0, MaxLines);
-  return <>
-    <div className="code" style={{"--gutter": `${String(shown.length).length + 1}ch`} as React.CSSProperties}>
-      {shown.map((line, i) => <div className="code-line" key={i}>
-        <span className="ln">{i + 1}</span><span className="lc">{line || " "}</span>
-      </div>)}
-    </div>
-    {lines.length > MaxLines &&
-      <div className="code-truncated">Showing the first {MaxLines.toLocaleString()} of {lines.length.toLocaleString()} lines. Download the file to see the rest.</div>}
-  </>;
 }
 
 export function FileViewer({image, digest, path, onSelect}: { image: string, digest: string, path: string, onSelect: (path: string) => void }) {
@@ -102,7 +87,7 @@ export function FileViewer({image, digest, path, onSelect}: { image: string, dig
   } else if (looksBinary(contents.data)) {
     body = <Empty icon={<IconFileUnknown size={36}/>} title="Binary file">Download it to inspect it locally.</Empty>;
   } else {
-    body = <CodeView text={contents.data}/>;
+    body = <CodeView path={path} text={contents.data}/>;
   }
 
   return <div className="viewer">

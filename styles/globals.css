@@ -255,7 +255,8 @@ code { font-family: var(--mono); }
   white-space: nowrap;
 }
 
-.viewer { display: flex; flex-direction: column; min-height: 100%; }
+.viewer-pane { overflow: hidden; }
+.viewer { display: flex; flex-direction: column; height: 100%; }
 
 .viewer-header {
   display: flex;
@@ -295,31 +296,36 @@ code { font-family: var(--mono); }
 .viewer-meta > span { display: flex; align-items: center; gap: 6px; }
 .viewer-meta > span + span::before { content: "·"; color: var(--faint); margin-right: 10px; }
 
-.viewer-body { flex: 1; padding: 0 24px 24px; }
+.viewer-body { flex: 1; min-height: 0; padding: 0 24px 24px; overflow: auto; display: flex; flex-direction: column; }
+.viewer-body > * { flex: 1; }
 .viewer-loading { padding: 40px; display: flex; justify-content: center; }
 
-.code {
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.6;
-  background: var(--surface);
-  border: 1px solid var(--border-soft);
-  border-radius: 10px;
-  padding: 12px 0;
-  overflow-x: auto;
+.code-view { height: 100%; display: flex; flex-direction: column; }
+.code-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
 }
-.code-line { display: flex; }
-.code-line:hover { background: var(--surface-2); }
-.ln {
-  flex: none;
-  width: calc(var(--gutter) + 24px);
-  padding-right: 16px;
-  text-align: right;
-  color: var(--faint);
-  user-select: none;
+.code-language { font-weight: 600; color: var(--text); }
+.code-hint { flex: 1; color: var(--faint); margin-left: 8px; }
+.code-host { flex: 1; min-height: 0; }
+
+.fold-marker {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--faint);
+  border-bottom: 1.5px solid var(--faint);
+  transform: rotate(-45deg);
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 120ms ease;
 }
-.lc { white-space: pre; padding-right: 24px; }
-.code-truncated { color: var(--muted); font-size: 12px; padding: 12px 4px; }
+.fold-marker.open { transform: rotate(45deg) translate(-1px, -1px); }
+.fold-marker:not(.open) { opacity: 1; border-color: var(--accent); }
+.cm-gutters:hover .fold-marker, .fold-marker:hover { opacity: 1; }
 
 .empty {
   display: flex;
