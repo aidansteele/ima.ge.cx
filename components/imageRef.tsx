@@ -23,6 +23,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
   const hash = () => window.location.hash;
 
   const {data: tagData, error: tagError} = useImageTags(repo);
+  const [pendingTag, setPendingTag] = useState<{image: string, tag: string} | null>(null);
   const [tagSearch, setTagSearch] = useState("");
   const tags = useMemo(() => sortTags(tagData?.Tags ?? [], tagSearch), [tagData, tagSearch]);
 
@@ -62,10 +63,18 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
         limit={200}
         nothingFound="No matching tags"
         data={tags}
-        value={tag ?? null}
+        value={pendingTag?.image === image ? pendingTag.tag : tag ?? null}
         // Drop the digest so the platform list is looked up for the new tag,
         // but keep the hash so the same file is shown if it exists there.
-        onChange={val => router.push(themedPath(`/${repo}:${val}${hash()}`))}
+        onChange={val => {
+          if (!val) return;
+          const selection = {image, tag: val};
+          setPendingTag(selection);
+          // A slow route must not delay feedback. Once it settles (even on
+          // failure), use the route again without clearing a newer selection.
+          const settled = () => setPendingTag(current => current === selection ? null : current);
+          void router.push(themedPath(`/${repo}:${val}${hash()}`)).then(settled, settled);
+        }}
       />
     </Tooltip>
     <span className="image-ref-sep">·</span>
