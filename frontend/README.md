@@ -3,9 +3,9 @@
 Browse the files, layers and configuration of public container images without
 pulling them to your machine or running Docker.
 
-This repository contains the web frontend, built with Next.js 13, React 18,
+This directory contains the web frontend, built with Next.js 13, React 18,
 Mantine 5, SWR and CodeMirror 6. Image indexing and file extraction live in the
-[backend repository](https://github.com/aidansteele/ima.ge.cx-backend).
+[backend directory](../backend/).
 
 ## Using the site
 
@@ -71,6 +71,7 @@ arbitrary OCI artifacts or every layer compression format.
 ## Local development
 
 Use Node.js 20 or later and npm. The Amplify build currently uses Node.js 20.
+Run the commands in this document from `frontend/`.
 
 ```shell
 npm ci
@@ -95,7 +96,8 @@ NEXT_PUBLIC_API_BASE_URL=https://your-backend.example/api/
 Include the trailing slash. This is a browser-visible, build-time setting, not a
 secret. Restart the development server after changing it, or rebuild for
 production. The backend must allow requests from the frontend's origin through
-CORS. See the backend repository for its own setup and deployment instructions.
+CORS. See the [backend README](../backend/README.md) for its own setup and
+deployment instructions.
 
 ### Checks and production build
 
@@ -131,8 +133,12 @@ tree and viewer, and scrolling long files past the metadata.
 
 The frontend is hosted on AWS Amplify. Pushing to `main` triggers a production
 build and deployment to [ima.ge.cx](https://ima.ge.cx).
-[amplify.yml](amplify.yml) installs dependencies with `npm ci`, runs
-`npm run build` and publishes `.next`.
+[amplify.yml](../amplify.yml) installs dependencies with `npm ci`, runs
+`npm run build` and publishes `.next`, all relative to `frontend/`.
+
+Before deploying the monorepo layout, set `AMPLIFY_MONOREPO_APP_ROOT=frontend`
+in the existing Amplify app's environment variables. This must match the
+`appRoot` in `amplify.yml`.
 
 Set `NEXT_PUBLIC_API_BASE_URL` in the Amplify branch's environment when targeting
 a non-default backend. Backend changes are deployed separately.

@@ -3,6 +3,28 @@ Life got in the way and I've forgotten entirely how it works. As an act of perso
 growth, I am publishing it here in its very rough and incomplete state, on the
 slim chance that someone else might find something useful in it.
 
+### Development and deployment
+
+This directory is the `browseimage` Go module. Run Go and SAM commands from
+`backend/`. The web frontend lives in [../frontend](../frontend/).
+
+Initialize the gztool submodule from the repository root:
+
+```shell
+git submodule update --init backend/targzi/gztool
+cd backend
+sam build --parallel
+```
+
+`sam build` builds locally; `./build.sh` also deploys the
+`imagecx-backend-beta` stack to AWS. Frontend deployment remains separate.
+
+Do not run the full Go test suite against live credentials: it includes legacy
+registry/S3 integration tests and a table-wipe test gated by `WIPE_TABLE=1`.
+Local-only checks include `go test ./... -run '^$'` (compile all test packages),
+`go test ./thelambda ./concatenator`, and
+`go test ./targzi -run '^TestReadIndexInfo$'`.
+
 ### Hidden files API
 
 `GET /api/dir` and `GET /api/file` accept `hidden=true` alongside the existing
