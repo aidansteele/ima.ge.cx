@@ -45,6 +45,15 @@ identity card without filesystem statistics; no platform is chosen implicitly.
 Canonical URLs omit query strings and file fragments (social crawlers cannot
 see fragments). The homepage retains its static sharing image.
 
+Pages also advertise `/api/oembed?url=…&format=json`, returning an oEmbed `photo`
+with the same sharing image and no optional title, author or provider text.
+Slack prefers this over OG/Twitter metadata for an image-only preview; other
+clients can continue using the existing tags. Explicit `?theme=light` or
+`?theme=dark` links retain their card palette. The endpoint accepts only
+`https://ima.ge.cx` page URLs and never fetches them or starts indexing.
+Slack caches unfurls, so test changes with a new URL (for example, add
+`&preview=2` to a URL that already has a query string), not an existing message.
+
 On desktop, the file tree and viewer sit side by side. On phones, switch between
 **Browse files** and **View file**. When reading a file, scroll the page to move
 the metadata out of the way; long code lines can scroll horizontally.
@@ -137,5 +146,5 @@ waits at most two seconds for metadata before using that fallback.
 it also reads `/api/dir` at the root, with a separate two-second timeout. Neither
 request can start indexing. Complete cards can be cached for one hour by clients
 and one day by CDNs; incomplete cards use `no-store` so they can improve after
-indexing. Bump the `v` parameter in `SocialMetadata` when changing the design to
+indexing. Bump the `v` parameter in `socialImageUrl` when changing the design to
 give social crawlers a new image URL (platforms may keep their own preview cache).

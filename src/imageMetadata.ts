@@ -1,6 +1,15 @@
 import type {ApiResponseDirectoryEntry, ImageInfo} from "./imageHooks";
 import {formatBytes} from "./formatBytes";
 
+export const siteUrl = "https://ima.ge.cx";
+
+export function socialImageUrl(image: string, digest = "", theme?: "light" | "dark") {
+  if (!image) return `${siteUrl}/og-image${theme === "light" ? "-light" : ""}.jpg`;
+  const params = new URLSearchParams({image, digest, v: "1"});
+  if (theme) params.set("theme", theme);
+  return `${siteUrl}/api/og?${params}`;
+}
+
 // Only use read-only endpoints here: crawlers must never start indexing jobs.
 async function fetchMetadata<T>(endpoint: "metadata" | "dir", params: Record<string, string>): Promise<T | undefined> {
   const controller = new AbortController();

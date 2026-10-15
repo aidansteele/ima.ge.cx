@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {renderToStaticMarkup} from "react-dom/server";
 import type {NextApiRequest, NextApiResponse} from "next";
 import handler from "../pages/api/og";
+import oembed from "../pages/api/oembed";
 import {ImageSocialCard} from "../components/imageSocialCard";
 import {imageDescription, readFilesystemSummary} from "../src/imageMetadata";
 
@@ -69,15 +70,16 @@ test("card identity separates registry ports, namespaces and tags without invent
   }
 });
 
-async function request(query: NextApiRequest["query"], method = "GET") {
-  const result = {status: 0, headers: {} as Record<string, string>, body: undefined as Buffer | string | undefined};
+async function request(query: NextApiRequest["query"], method = "GET", endpoint: typeof handler | typeof oembed = handler) {
+  const result = {status: 0, headers: {} as Record<string, string>, body: undefined as unknown};
   const res = {
     setHeader(key: string, value: string) { result.headers[key] = value; },
     status(code: number) { result.status = code; return res; },
-    send(body: Buffer | string | undefined) { result.body = body; },
+    send(body: unknown) { result.body = body; },
+    json(body: unknown) { result.body = body; },
     end() {},
   };
-  await handler({query, method} as NextApiRequest, res as unknown as NextApiResponse);
+  await endpoint({query, method} as NextApiRequest, res as unknown as NextApiResponse);
   return result;
 }
 
@@ -123,6 +125,50 @@ test("OG endpoint rejects oversized or malformed requests and unsupported method
     assert.equal((await request(query)).status, 400);
   }
   const post = await request({image: "nginx"}, "POST");
+  assert.equal(post.status, 405);
+  assert.equal(post.headers.Allow, "GET, HEAD");
+});
+
+test("oEmbed returns only a photo, preserving image identity and explicit theme without fetching", async () => {
+  global.fetch = async () => { assert.fail("oEmbed must not fetch URLs or start indexing"); };
+  for (const [url, image] of [
+    ["https://ima.ge.cx/", "https://ima.ge.cx/og-image.jpg"],
+    ["https://ima.ge.cx/?theme=light", "https://ima.ge.cx/og-image-light.jpg"],
+    ["https://ima.ge.cx/nginx%3A1.27", "https://ima.ge.cx/api/og?image=nginx%3A1.27&digest=&v=1"],
+    [`https://ima.ge.cx/registry.example.com%3A5000/team/app%3Av2%40${digest}?hidden=true&theme=light#/etc/passwd`,
+      `https://ima.ge.cx/api/og?image=registry.example.com%3A5000%2Fteam%2Fapp%3Av2&digest=sha256%3A${"a".repeat(64)}&v=1&theme=light`],
+    ["https://ima.ge.cx/nginx?theme=dark", "https://ima.ge.cx/api/og?image=nginx&digest=&v=1&theme=dark"],
+    ["https://ima.ge.cx/?theme=light&theme=dark", "https://ima.ge.cx/og-image.jpg"],
+  ]) {
+    const response = await request({url, format: "json"}, "GET", oembed);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["Content-Type"], "application/json");
+    assert.deepEqual(response.body, {version: "1.0", type: "photo", url: image, width: 1200, height: 630});
+  }
+  for (const [limits, width, height] of [
+    [{maxwidth: "600"}, 600, 315], [{maxheight: "210"}, 400, 210],
+    [{maxwidth: "800", maxheight: "210"}, 400, 210], [{maxwidth: "2400"}, 1200, 630],
+  ] as const) {
+    const response = await request({url: "https://ima.ge.cx/", ...limits}, "GET", oembed);
+    assert.deepEqual(response.body, {version: "1.0", type: "photo", url: "https://ima.ge.cx/og-image.jpg", width, height});
+  }
+  const head = await request({url: "https://ima.ge.cx/"}, "HEAD", oembed);
+  assert.equal(head.status, 200);
+  assert.equal(head.body, undefined);
+});
+
+test("oEmbed rejects foreign or invalid URLs, unsupported formats, dimensions and methods", async () => {
+  for (const url of [undefined, ["https://ima.ge.cx/"], "not a URL", "https://evil.example/", "http://ima.ge.cx/",
+    "https://ima.ge.cx.evil.example/", "https://user@ima.ge.cx/", "https://ima.ge.cx/%ZZ", "https://ima.ge.cx/api/og",
+    "https://ima.ge.cx/nginx@sha256:short", `https://ima.ge.cx/@${digest}`, "https://ima.ge.cx/a//b",
+    `https://ima.ge.cx/${"a".repeat(513)}`]) {
+    assert.equal((await request({url}, "GET", oembed)).status, 404, String(url));
+  }
+  assert.equal((await request({url: "https://ima.ge.cx/", format: "xml"}, "GET", oembed)).status, 501);
+  for (const maxwidth of ["0", "-1", "1.5", "NaN", "Infinity", ["100", "200"]]) {
+    assert.equal((await request({url: "https://ima.ge.cx/", maxwidth}, "GET", oembed)).status, 400);
+  }
+  const post = await request({url: "https://ima.ge.cx/"}, "POST", oembed);
   assert.equal(post.status, 405);
   assert.equal(post.headers.Allow, "GET, HEAD");
 });

@@ -1,8 +1,8 @@
 import Head from "next/head";
 import {useRouter} from "next/router";
 import {colorScheme, themePath} from "../src/theme";
+import {siteUrl, socialImageUrl} from "../src/imageMetadata";
 
-export const siteUrl = "https://ima.ge.cx";
 export const siteTitle = "ima.ge.cx · See inside any container image";
 export const siteDescription = "Browse the files, layers and configuration of public Docker and OCI container images without pulling them or running Docker.";
 
@@ -16,9 +16,7 @@ export function SocialMetadata({title = siteTitle, description = siteDescription
   const theme = colorScheme(useRouter().query.theme);
   const url = `${siteUrl}${path}`;
   const shareUrl = `${siteUrl}${themePath(path, theme)}`;
-  const params = new URLSearchParams({image: imageReference ?? "", digest, v: "1"});
-  if (theme) params.set("theme", theme);
-  const image = imageReference ? `${siteUrl}/api/og?${params}` : `${siteUrl}/og-image${theme === "light" ? "-light" : ""}.jpg`;
+  const image = socialImageUrl(imageReference ?? "", digest, theme);
   const imageAlt = imageReference ? `${imageReference} — filesystem preview on ima.ge.cx` :
     "ima.ge.cx — See inside any container image. Files, layers & config. No Docker required.";
 
@@ -26,6 +24,8 @@ export function SocialMetadata({title = siteTitle, description = siteDescription
     <title>{title}</title>
     <meta name="description" content={description} key="description"/>
     <link rel="canonical" href={url} key="canonical"/>
+    <link rel="alternate" type="application/json+oembed"
+          href={`${siteUrl}/api/oembed?${new URLSearchParams({url: shareUrl, format: "json"})}`} key="oembed"/>
     <meta property="og:type" content="website" key="og:type"/>
     <meta property="og:site_name" content="ima.ge.cx" key="og:site_name"/>
     <meta property="og:title" content={title} key="og:title"/>
