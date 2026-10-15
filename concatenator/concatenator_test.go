@@ -2,37 +2,186 @@ package main
 
 import (
 	"archive/tar"
+	"browseimage/bitypes"
 	"browseimage/layerreader"
 	"browseimage/targzi"
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/klauspost/compress/gzip"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestApplyEntryWhiteouts(t *testing.T) {
-	ctx := context.Background()
-	fileMap := map[string]*layerreader.EntryWithLayer{}
+func TestHandleCombinedIndexes(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
+			input := &concatenatorInput{Key: &bitypes.ImageInfoKey{Repo: "repo"}}
+			objects := map[string][]byte{}
+			for i, names := range [][]string{{"live", "gone", "history"}, {"live", "history"}, {".wh.gone", ".wh.history"}, {"tail"}, {"last"}} {
+				hash := v1.Hash{Algorithm: "sha256", Hex: fmt.Sprint(i)}
+				input.Layers = append(input.Layers, hash)
+				key := fmt.Sprintf("exact/%d.json.gz", i)
+				input.Indexes = append(input.Indexes, layerreader.RemoteOutput{Tar: layerreader.Put{Key: key}, Gzi: layerreader.Put{Key: fmt.Sprintf("exact/%d.gzi", i)}})
+				if i == 0 {
+					input.Indexes[i].Tar.VersionId = "version-one"
+				}
+				if legacy {
+					key = fmt.Sprintf("layers/%s/files.json.gz", hash)
+				}
+				var buf bytes.Buffer
+				gz := gzip.NewWriter(&buf)
+				for _, name := range names {
+					require.NoError(t, json.NewEncoder(gz).Encode(targzi.Entry{Hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(i + 1)}}))
+				}
+				require.NoError(t, gz.Close())
+				objects["/bucket/"+key] = buf.Bytes()
+			}
+			if legacy {
+				input.Indexes = nil
+			}
+			later := make(chan struct{})
+			firstReleased := make(chan struct{})
+			var published []string
+			views := map[string]map[string]*layerreader.EntryWithLayer{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					body, ok := objects[r.URL.Path]
+					if !ok {
+						http.NotFound(w, r)
+						return
+					}
+					first := strings.Contains(r.URL.Path, "/4.json.gz") || strings.Contains(r.URL.Path, "sha256:4/")
+					second := strings.Contains(r.URL.Path, "/3.json.gz") || strings.Contains(r.URL.Path, "sha256:3/")
+					fifth := strings.Contains(r.URL.Path, "/0.json.gz") || strings.Contains(r.URL.Path, "sha256:0/")
+					if fifth {
+						if !legacy {
+							assert.Equal(t, "version-one", r.URL.Query().Get("versionId"))
+						}
+						select {
+						case <-firstReleased:
+						default:
+							t.Error("download window advanced past a blocked first layer")
+						}
+					}
+					if first {
+						select {
+						case <-later:
+						case <-time.After(5 * time.Second):
+							t.Error("downloads were not parallel")
+						}
+						time.Sleep(30 * time.Millisecond)
+						close(firstReleased)
+					}
+					w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+					_, _ = w.Write(body)
+					if second {
+						close(later)
+					}
+					return
+				}
+				if r.Method != http.MethodPut {
+					t.Errorf("unexpected method %s", r.Method)
+					w.WriteHeader(400)
+					return
+				}
+				gz, err := gzip.NewReader(r.Body)
+				if !assert.NoError(t, err) {
+					w.WriteHeader(400)
+					return
+				}
+				defer gz.Close()
+				view := map[string]*layerreader.EntryWithLayer{}
+				dec := json.NewDecoder(gz)
+				var names []string
+				for {
+					var e layerreader.EntryWithLayer
+					err := dec.Decode(&e)
+					if err == io.EOF {
+						break
+					}
+					if !assert.NoError(t, err) {
+						return
+					}
+					view[e.Hdr.Name] = &e
+					names = append(names, e.Hdr.Name)
+				}
+				assert.True(t, sort.StringsAreSorted(names))
+				name := filepath.Base(r.URL.Path)
+				published = append(published, name)
+				views[name] = view
+				w.Header().Set("x-amz-version-id", "published")
+			}))
+			defer server.Close()
+			api := s3.NewFromConfig(aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}, func(o *s3.Options) { o.UsePathStyle = true })
+			c := &concatenator{bucket: "bucket", downloader: manager.NewDownloader(api), uploader: manager.NewUploader(api)}
+			out, err := c.handle(context.Background(), input)
+			require.NoError(t, err)
+			assert.Equal(t, "published", out.VersionId)
+			assert.Equal(t, []string{"hidden-index.json.gz", "index.json.gz"}, published)
+			final, hidden := views["index.json.gz"], views["hidden-index.json.gz"]
+			require.Len(t, final, 3)
+			require.Len(t, hidden, 2)
+			for name, want := range map[string]int{"live": 1, "gone": 0, "history": 1, "tail": 3, "last": 4} {
+				e := final[name]
+				if e == nil {
+					e = hidden[name]
+				}
+				require.NotNil(t, e, name)
+				assert.Equal(t, input.Layers[want].String(), e.Layer)
+				assert.Equal(t, int64(want+1), e.Hdr.Size)
+				gzi := ""
+				if !legacy {
+					gzi = input.Indexes[want].Gzi.Key
+				}
+				assert.Equal(t, gzi, e.GzipIndex)
+			}
+		})
+	}
+}
+
+func TestHandleRejectsMismatchedIndexes(t *testing.T) {
+	c := &concatenator{}
+	_, err := c.handle(context.Background(), &concatenatorInput{Layers: []v1.Hash{{}}, Indexes: []layerreader.RemoteOutput{}})
+	require.ErrorContains(t, err, "does not match")
+}
+
+func TestMergeLayerWhiteouts(t *testing.T) {
+	merged := newMergedIndex()
+	fileMap := merged.final
 	apply := func(layer string, names ...string) {
+		var entries []targzi.Entry
 		for _, name := range names {
-			applyEntry(ctx, fileMap, targzi.Entry{Hdr: tar.Header{Name: name}}, layer)
+			entries = append(entries, targzi.Entry{Hdr: tar.Header{Name: name}})
 		}
+		merged.addLayer(entries, layer, "")
 	}
 
-	apply("lower",
-		"etc/", "etc/foo/", "etc/foo/a.conf", "etc/foobar", "etc/passwd",
-		"opt/", "opt/x", "opt/sub/", "opt/sub/y",
-	)
 	apply("upper",
 		"etc/.wh.foo",    // directory whiteout: removes etc/foo/ and its contents only
 		"etc/.wh.passwd", // file whiteout
 		"opt/-early",     // sorts before the opaque marker in the same layer
 		"opt/.wh..wh..opq",
 		"opt/late",
+	)
+	apply("lower",
+		"etc/", "etc/foo/", "etc/foo/a.conf", "etc/foobar", "etc/passwd",
+		"opt/", "opt/x", "opt/sub/", "opt/sub/y",
 	)
 
 	got := make([]string, 0, len(fileMap))
@@ -45,24 +194,26 @@ func TestApplyEntryWhiteouts(t *testing.T) {
 }
 
 func TestAddDirectorySizes(t *testing.T) {
-	ctx := context.Background()
-	fileMap := map[string]*layerreader.EntryWithLayer{}
+	merged := newMergedIndex()
+	fileMap := merged.final
 	apply := func(layer string, entries ...tar.Header) {
+		var batch []targzi.Entry
 		for _, h := range entries {
-			applyEntry(ctx, fileMap, targzi.Entry{Hdr: h}, layer)
+			batch = append(batch, targzi.Entry{Hdr: h})
 		}
+		merged.addLayer(batch, layer, "")
 	}
 	dir := func(name string) tar.Header { return tar.Header{Name: name, Typeflag: tar.TypeDir} }
 	file := func(name string, size int64) tar.Header {
 		return tar.Header{Name: name, Typeflag: tar.TypeReg, Size: size}
 	}
 
+	apply("upper", file("usr/.wh.README", 0), file("usr/lib/c.so", 5))
 	apply("lower",
 		dir("usr/"), dir("usr/lib/"), file("usr/lib/a.so", 1000), file("usr/lib/b.so", 200),
 		file("usr/README", 30), tar.Header{Name: "usr/link", Typeflag: tar.TypeSymlink, Linkname: "README"},
 		dir("usr/libexec/"), file("usr/libexec/x", 4),
 	)
-	apply("upper", file("usr/.wh.README", 0), file("usr/lib/c.so", 5))
 	addDirectorySizes(fileMap)
 
 	got := func(name string) [2]int64 { return [2]int64{fileMap[name].DirSize, fileMap[name].DirFiles} }
@@ -74,8 +225,9 @@ func TestAddDirectorySizes(t *testing.T) {
 }
 
 func TestHiddenEntries(t *testing.T) {
-	final := map[string]*layerreader.EntryWithLayer{}
-	stored := map[string]*layerreader.EntryWithLayer{}
+	merged := newMergedIndex()
+	final, stored := merged.final, merged.stored
+	layers := map[string][]targzi.Entry{}
 	add := func(layer, name string, size int64, kind byte) {
 		parent := filepath.Dir(strings.TrimSuffix(name, "/"))
 		if parent == "." {
@@ -83,10 +235,10 @@ func TestHiddenEntries(t *testing.T) {
 		} else {
 			parent += "/"
 		}
-		mergeEntry(context.Background(), final, stored, targzi.Entry{
+		layers[layer] = append(layers[layer], targzi.Entry{
 			Hdr:    tar.Header{Name: name, Size: size, Typeflag: kind},
 			Offset: 123, Spans: []int{2, 3}, Parent: parent,
-		}, layer)
+		})
 	}
 	for _, name := range []string{"gone/deep/file", "gone/link", "gone2/live", "opaque/old", "opaque2/live", "recreated", "overwritten", "same", "latest"} {
 		add("lower", name, 7, tar.TypeReg)
@@ -102,6 +254,9 @@ func TestHiddenEntries(t *testing.T) {
 	add("upper", "opaque/new", 100, tar.TypeReg)
 	add("upper", "recreated", 20, tar.TypeReg)
 	add("upper", "overwritten", 30, tar.TypeReg)
+	for _, layer := range []string{"upper", "middle", "lower"} {
+		merged.addLayer(layers[layer], layer, "")
+	}
 	hidden := hiddenEntries(final, stored)
 	require.Len(t, hidden, 7)
 	for _, name := range []string{"gone/deep/file", "gone/link", "opaque/old", "latest", "gone/", "gone/deep/", "opaque/"} {

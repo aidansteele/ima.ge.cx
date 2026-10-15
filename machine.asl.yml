@@ -83,6 +83,7 @@ States:
           Repo: "{% $states.input.Repo %}"
           Digest: "{% $states.input.Digest %}"
         Layers: "{% $states.input.ImageLayers.Layers %}"
+        Indexes: "{% $states.input.Indexes %}"
         ExecutionName: "{% $states.context.Execution.Name %}"
     Output: "{% $states.result.Payload %}"
     Retry:

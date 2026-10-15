@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -48,8 +50,9 @@ func main() {
 }
 
 type concatenatorInput struct {
-	Key    *bitypes.ImageInfoKey
-	Layers []v1.Hash
+	Key     *bitypes.ImageInfoKey
+	Layers  []v1.Hash
+	Indexes []layerreader.RemoteOutput
 }
 
 type concatenatorOutput struct {
@@ -64,55 +67,117 @@ type concatenator struct {
 }
 
 func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*concatenatorOutput, error) {
-	ctx = logging.WithRequestPayload(ctx, input)
+	started := time.Now()
+	if input.Indexes != nil && len(input.Indexes) != len(input.Layers) {
+		return nil, fmt.Errorf("indexes length %d does not match layers length %d", len(input.Indexes), len(input.Layers))
+	}
+	ctx = logging.WithAttrs(ctx, "repo", input.Key.Repo, "digest", input.Key.Digest)
 	slog.InfoContext(ctx, "handling concatenator request")
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait() }()
 
-	fileMap := map[string]*layerreader.EntryWithLayer{}
-	stored := map[string]*layerreader.EntryWithLayer{}
+	merged := newMergedIndex()
+	fileMap := merged.final
 
-	for _, hash := range input.Layers {
-		w := manager.NewWriteAtBuffer(nil)
-		_, err := ll.downloader.Download(ctx, w, &s3.GetObjectInput{
-			Bucket: &ll.bucket,
-			Key:    aws.String(fmt.Sprintf("layers/%s/files.json.gz", hash)),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("downloading layer files index: %w", err)
+	// A sliding window, rather than an unrestricted worker queue: even when
+	// the first layer is slow, at most four decoded layers are resident ahead.
+	type result struct {
+		entries []targzi.Entry
+		err     error
+	}
+	const window = 4
+	var pending [window]chan result
+	start := func(i int) {
+		ch := make(chan result, 1)
+		pending[i%window] = ch
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			entries, err := ll.downloadIndex(ctx, input, len(input.Layers)-1-i)
+			ch <- result{entries, err}
+		}()
+	}
+	for i := 0; i < window && i < len(input.Layers); i++ {
+		start(i)
+	}
+	var mergeDuration time.Duration
+	for i := range input.Layers {
+		r := <-pending[i%window]
+		if r.err != nil {
+			return nil, r.err
 		}
-
-		gzr, err := gzip.NewReader(bytes.NewReader(w.Bytes()))
-		if err != nil {
-			return nil, fmt.Errorf("creating gzip reader: %w", err)
+		mergeStart := time.Now()
+		layer := len(input.Layers) - 1 - i
+		gzi := ""
+		if input.Indexes != nil {
+			gzi = input.Indexes[layer].Gzi.Key
 		}
-
-		dec := json.NewDecoder(gzr)
-		for {
-			e := targzi.Entry{}
-			err = dec.Decode(&e)
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				return nil, fmt.Errorf("unmarshalling entry: %w", err)
-			}
-
-			mergeEntry(ctx, fileMap, stored, e, hash.String())
+		merged.addLayer(r.entries, input.Layers[layer].String(), gzi)
+		mergeDuration += time.Since(mergeStart)
+		r.entries = nil
+		if i+window < len(input.Layers) {
+			start(i + window)
 		}
 	}
+	slog.InfoContext(ctx, "combined layer indexes", "duration", time.Since(started), "merge_duration", mergeDuration, "layers", len(input.Layers))
 
+	sizeStart := time.Now()
 	addDirectorySizes(fileMap)
+	slog.InfoContext(ctx, "sized final directories", "duration", time.Since(sizeStart))
+	hiddenStart := time.Now()
+	hidden := hiddenEntries(fileMap, merged.stored)
+	slog.InfoContext(ctx, "built hidden index", "duration", time.Since(hiddenStart), "entries", len(hidden))
 	// Publish hidden data first so a newly completed index always has both views.
-	if _, err := ll.uploadIndex(ctx, input, "hidden-index.json.gz", hiddenEntries(fileMap, stored)); err != nil {
+	if _, err := ll.uploadIndex(ctx, input, "hidden-index.json.gz", hidden); err != nil {
 		return nil, err
 	}
 	upload, err := ll.uploadIndex(ctx, input, "index.json.gz", fileMap)
 	if err != nil {
 		return nil, err
 	}
+	slog.InfoContext(ctx, "completed concatenation", "duration", time.Since(started))
 	return &concatenatorOutput{Key: aws.ToString(upload.Key), VersionId: aws.ToString(upload.VersionID)}, nil
 }
 
+func (ll *concatenator) downloadIndex(ctx context.Context, input *concatenatorInput, i int) ([]targzi.Entry, error) {
+	started := time.Now()
+	key := fmt.Sprintf("layers/%s/files.json.gz", input.Layers[i])
+	var version *string
+	if input.Indexes != nil {
+		key = input.Indexes[i].Tar.Key
+		if input.Indexes[i].Tar.VersionId != "" {
+			version = aws.String(input.Indexes[i].Tar.VersionId)
+		}
+	}
+	w := manager.NewWriteAtBuffer(nil)
+	if _, err := ll.downloader.Download(ctx, w, &s3.GetObjectInput{Bucket: &ll.bucket, Key: &key, VersionId: version}); err != nil {
+		return nil, fmt.Errorf("downloading layer %d files index: %w", i, err)
+	}
+	downloadDuration := time.Since(started)
+	gzr, err := gzip.NewReader(bytes.NewReader(w.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("creating gzip reader: %w", err)
+	}
+	defer gzr.Close()
+	decodeStart := time.Now()
+	var entries []targzi.Entry
+	dec := json.NewDecoder(gzr)
+	for {
+		var e targzi.Entry
+		if err := dec.Decode(&e); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("unmarshalling layer %d entry: %w", i, err)
+		}
+		entries = append(entries, e)
+	}
+	slog.InfoContext(ctx, "read layer index", "layer", i, "download_duration", downloadDuration, "decode_duration", time.Since(decodeStart), "entries", len(entries))
+	return entries, nil
+}
+
 func (ll *concatenator) uploadIndex(ctx context.Context, input *concatenatorInput, filename string, fileMap map[string]*layerreader.EntryWithLayer) (*manager.UploadOutput, error) {
+	started := time.Now()
 	arr := make([]*layerreader.EntryWithLayer, 0, len(fileMap))
 	for _, e := range fileMap {
 		arr = append(arr, e)
@@ -123,7 +188,10 @@ func (ll *concatenator) uploadIndex(ctx context.Context, input *concatenatorInpu
 	})
 
 	buf := &bytes.Buffer{}
-	gzw := gzip.NewWriter(buf)
+	gzw, err := gzip.NewWriterLevel(buf, gzip.BestSpeed)
+	if err != nil {
+		return nil, fmt.Errorf("creating gzip writer: %w", err)
+	}
 
 	// json.Encoder terminates each value with a newline, producing JSON Lines.
 	enc := json.NewEncoder(gzw)
@@ -134,11 +202,13 @@ func (ll *concatenator) uploadIndex(ctx context.Context, input *concatenatorInpu
 		}
 	}
 
-	err := gzw.Close()
+	err = gzw.Close()
 	if err != nil {
 		return nil, fmt.Errorf("closing gzip writer: %w", err)
 	}
 
+	encodeDuration := time.Since(started)
+	uploadStart := time.Now()
 	upload, err := ll.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket: &ll.bucket,
 		Key:    aws.String(fmt.Sprintf("images/%s/%s/%s", input.Key.Repo, input.Key.Digest, filename)),
@@ -147,16 +217,59 @@ func (ll *concatenator) uploadIndex(ctx context.Context, input *concatenatorInpu
 	if err != nil {
 		return nil, fmt.Errorf("uploading combined index: %w", err)
 	}
+	slog.InfoContext(ctx, "published combined index", "filename", filename, "encode_duration", encodeDuration, "upload_duration", time.Since(uploadStart), "entries", len(arr))
 
 	return upload, nil
 }
 
-// Keep only the latest stored header for each path, independently of whiteouts.
-func mergeEntry(ctx context.Context, final, stored map[string]*layerreader.EntryWithLayer, e targzi.Entry, layer string) {
-	if !strings.HasPrefix(filepath.Base(e.Hdr.Name), layerreader.WhiteoutPrefix) {
-		stored[strings.TrimSuffix(e.Hdr.Name, "/")] = &layerreader.EntryWithLayer{Entry: e, Layer: layer}
+type mergedIndex struct {
+	final, stored   map[string]*layerreader.EntryWithLayer
+	targets, opaque map[string]bool
+}
+
+func newMergedIndex() *mergedIndex {
+	return &mergedIndex{
+		final: map[string]*layerreader.EntryWithLayer{}, stored: map[string]*layerreader.EntryWithLayer{},
+		targets: map[string]bool{}, opaque: map[string]bool{},
 	}
-	applyEntry(ctx, final, e, layer)
+}
+
+// Visit layers newest-first: each path is considered once per stored header,
+// rather than rescanning the accumulated filesystem for every whiteout.
+func (m *mergedIndex) addLayer(entries []targzi.Entry, layer, gzipIndex string) {
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		path := e.Hdr.Name
+		if strings.HasPrefix(filepath.Base(path), layerreader.WhiteoutPrefix) {
+			continue
+		}
+		// Hidden mode needs the latest stored header even if a whiteout hides it.
+		storedPath := strings.TrimSuffix(path, "/")
+		if m.stored[storedPath] == nil {
+			m.stored[storedPath] = &layerreader.EntryWithLayer{Entry: e, Layer: layer, GzipIndex: gzipIndex}
+		}
+		if m.final[path] != nil {
+			continue
+		}
+		removed := m.targets[path] || (m.opaque[""] && path != "")
+		for j := 0; !removed && j < len(path); j++ {
+			if path[j] == '/' {
+				removed = m.targets[path[:j]] || (m.opaque[path[:j+1]] && j+1 < len(path))
+			}
+		}
+		if !removed {
+			m.final[path] = &layerreader.EntryWithLayer{Entry: e, Layer: layer, GzipIndex: gzipIndex}
+		}
+	}
+	// Whiteouts affect only lower layers, never their own layer's entries.
+	for _, e := range entries {
+		base := filepath.Base(e.Hdr.Name)
+		if base == layerreader.WhiteoutOpaqueDir {
+			m.opaque[strings.TrimSuffix(e.Hdr.Name, layerreader.WhiteoutOpaqueDir)] = true
+		} else if strings.HasPrefix(base, layerreader.WhiteoutPrefix) {
+			m.targets[filepath.Join(filepath.Dir(e.Hdr.Name), strings.TrimPrefix(base, layerreader.WhiteoutPrefix))] = true
+		}
+	}
 }
 
 func hiddenEntries(final, stored map[string]*layerreader.EntryWithLayer) map[string]*layerreader.EntryWithLayer {
@@ -165,6 +278,9 @@ func hiddenEntries(final, stored map[string]*layerreader.EntryWithLayer) map[str
 		name = strings.TrimSuffix(name, "/")
 		present[name] = true
 		for dir := filepath.Dir(name); dir != "." && dir != "/"; dir = filepath.Dir(dir) {
+			if present[dir] {
+				break // Its ancestors were already marked by an earlier path.
+			}
 			present[dir] = true
 		}
 	}
@@ -194,38 +310,6 @@ func hiddenEntries(final, stored map[string]*layerreader.EntryWithLayer) map[str
 	}
 	addDirectorySizes(hidden)
 	return hidden
-}
-
-// applyEntry merges one entry from layer into fileMap, which holds the
-// entries of the layers below it keyed by path. Whiteouts only remove entries
-// from lower layers, never entries from the layer that contains them.
-func applyEntry(ctx context.Context, fileMap map[string]*layerreader.EntryWithLayer, e targzi.Entry, layer string) {
-	base := filepath.Base(e.Hdr.Name)
-
-	switch {
-	case base == layerreader.WhiteoutOpaqueDir:
-		// An opaque whiteout hides the directory's existing contents but keeps the directory.
-		dir := strings.TrimSuffix(e.Hdr.Name, layerreader.WhiteoutOpaqueDir)
-		slog.DebugContext(ctx, "processing opaque whiteout directory", "dir", dir)
-		for key, entry := range fileMap {
-			if key != dir && strings.HasPrefix(key, dir) && entry.Layer != layer {
-				delete(fileMap, key)
-				slog.DebugContext(ctx, "deleting recursively", "path", key)
-			}
-		}
-	case strings.HasPrefix(base, layerreader.WhiteoutPrefix):
-		// A whiteout removes a file, or a directory (keyed with a trailing
-		// slash) and everything beneath it.
-		target := filepath.Join(filepath.Dir(e.Hdr.Name), strings.TrimPrefix(base, layerreader.WhiteoutPrefix))
-		for key, entry := range fileMap {
-			if (key == target || strings.HasPrefix(key, target+"/")) && entry.Layer != layer {
-				delete(fileMap, key)
-				slog.DebugContext(ctx, "deleting whiteout path", "path", key)
-			}
-		}
-	default:
-		fileMap[e.Hdr.Name] = &layerreader.EntryWithLayer{Entry: e, Layer: layer}
-	}
 }
 
 // addDirectorySizes sets each directory's DirSize and DirFiles to the totals

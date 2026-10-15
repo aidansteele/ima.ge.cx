@@ -5,13 +5,15 @@ import (
 	"browseimage/layerreader"
 	"browseimage/logging"
 	"browseimage/targzi"
+	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
-	"net/http"
-	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -25,7 +27,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
@@ -39,8 +43,10 @@ func main() {
 		panic(fmt.Sprintf("err %+v", err))
 	}
 
+	s3api := s3.NewFromConfig(cfg)
 	d := downloader{
-		uploader: manager.NewUploader(s3.NewFromConfig(cfg)),
+		s3:       s3api,
+		uploader: manager.NewUploader(s3api),
 		bucket:   os.Getenv("BUCKET"),
 		dynamodb: dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
 			o.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
@@ -48,44 +54,32 @@ func main() {
 			})
 		}),
 		table: os.Getenv("TABLE"),
+		cache: os.Getenv("LAYER_CACHE") != "false",
 	}
 
 	lambda.Start(logging.Middleware(d.handle))
 }
 
 type downloader struct {
+	s3       *s3.Client
 	uploader *manager.Uploader
 	bucket   string
 	dynamodb *dynamodb.Client
 	table    string
-}
-
-type transport struct{}
-
-func (t transport) RoundTrip(request *http.Request) (*http.Response, error) {
-	ctx := request.Context()
-	dump, _ := httputil.DumpRequestOut(request, false)
-	slog.DebugContext(ctx, "outgoing HTTP request", "dump", string(dump))
-
-	resp, err := http.DefaultTransport.RoundTrip(request)
-	if resp != nil {
-		dump, _ = httputil.DumpResponse(resp, false)
-		slog.DebugContext(ctx, "incoming HTTP response", "dump", string(dump))
-	}
-
-	return resp, err
+	cache    bool
 }
 
 func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput) (*layerreader.RemoteOutput, error) {
 	ctx = logging.WithRequestPayload(ctx, input)
 	slog.InfoContext(ctx, "handling remote layer download request")
+	started := time.Now()
 
 	ref, err := name.ParseReference(fmt.Sprintf("%s@%s", input.Key.Repo, input.Key.Digest))
 	if err != nil {
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithTransport(transport{}), remote.WithContext(ctx))
+	img, err := remote.Image(ref, remote.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("getting image for ref: %w", err)
 	}
@@ -106,6 +100,23 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		LayerDigest: input.Layer.String(),
 	}
 
+	cacheKey := fmt.Sprintf("layers/index-v2/%s/complete.json", input.Layer)
+	if d.cache {
+		cached, err := d.cachedIndex(ctx, cacheKey)
+		if err != nil {
+			return nil, err
+		}
+		if cached != nil && cached.TotalBytes == totalSize {
+			_, err := d.dynamodb.PutItem(ctx, &dynamodb.PutItemInput{
+				TableName: &d.table,
+				Item: (&bitypes.LayerProgress{LayerProgressKey: key, TotalBytes: totalSize,
+					CompletedBytes: totalSize, TotalFiles: cached.Files, CompletedFiles: cached.Files}).Marshal(),
+			})
+			slog.InfoContext(ctx, "reused layer index", "duration", time.Since(started), "bytes", totalSize)
+			return &cached.RemoteOutput, err
+		}
+	}
+
 	_, err = d.dynamodb.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: &d.table,
 		Item: (&bitypes.LayerProgress{
@@ -124,12 +135,16 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 
 	defer raw.Close()
 
-	counter := &CountReader{Reader: raw}
+	checksum, err := v1.Hasher(input.Layer.Algorithm)
+	if err != nil {
+		return nil, err
+	}
+	counter := &CountReader{Reader: io.TeeReader(raw, checksum)}
 	var fileCount int64 = 0
 
 	countctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	progressDone := make(chan struct{})
+	defer func() { cancel(); <-progressDone }()
 	go func() {
 		defer close(progressDone)
 		d.countProgress(countctx, &counter.count, &fileCount, key)
@@ -142,16 +157,27 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 	}
 	defer os.RemoveAll(dir)
 
-	index, err := targzi.BuildIndex(dir, counter, &fileCount)
+	indexStart := time.Now()
+	index, err := targzi.BuildIndex(ctx, dir, counter, &fileCount)
 	if err != nil {
 		return nil, fmt.Errorf("building index: %w", err)
 	}
+	if counter.count != totalSize || input.Layer.Hex != fmt.Sprintf("%x", checksum.Sum(nil)) {
+		return nil, fmt.Errorf("layer size or digest mismatch")
+	}
+	slog.InfoContext(ctx, "indexed layer", "duration", time.Since(indexStart), "read_duration", counter.readDuration, "bytes", counter.count, "files", fileCount)
 
 	// Flush the final progress to DynamoDB before continuing.
 	cancel()
 	<-progressDone
 
-	prefix := fmt.Sprintf("layers/%s/", input.Layer)
+	// Each build writes an immutable pair. A single completion object publishes
+	// the pair atomically; concurrent builds cannot mix offsets and dictionaries.
+	var buildID [16]byte
+	if _, err := cryptorand.Read(buildID[:]); err != nil {
+		return nil, fmt.Errorf("creating index build ID: %w", err)
+	}
+	prefix := fmt.Sprintf("layers/index-v2/%s/%x/", input.Layer, buildID)
 
 	gzf, err := os.Open(index.GzIndexPath)
 	if err != nil {
@@ -191,7 +217,7 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		return nil, fmt.Errorf("uploading file index to S3: %w", err)
 	}
 
-	return &layerreader.RemoteOutput{
+	output := &layerreader.RemoteOutput{
 		Gzi: layerreader.Put{
 			Key:       aws.ToString(gziPut.Key),
 			VersionId: aws.ToString(gziPut.VersionID),
@@ -202,7 +228,41 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 			VersionId: aws.ToString(tarPut.VersionID),
 			Size:      ffstat.Size(),
 		},
-	}, nil
+	}
+	if d.cache {
+		body, err := json.Marshal(layerCache{RemoteOutput: *output, TotalBytes: totalSize, Files: fileCount})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := d.s3.PutObject(ctx, &s3.PutObjectInput{Bucket: &d.bucket, Key: &cacheKey, Body: bytes.NewReader(body)}); err != nil {
+			return nil, fmt.Errorf("publishing layer cache: %w", err)
+		}
+	}
+	slog.InfoContext(ctx, "completed layer", "duration", time.Since(started))
+	return output, nil
+}
+
+type layerCache struct {
+	layerreader.RemoteOutput
+	TotalBytes int64
+	Files      int64
+}
+
+func (d *downloader) cachedIndex(ctx context.Context, key string) (*layerCache, error) {
+	get, err := d.s3.GetObject(ctx, &s3.GetObjectInput{Bucket: &d.bucket, Key: &key})
+	var missing *s3types.NoSuchKey
+	if errors.As(err, &missing) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading layer cache: %w", err)
+	}
+	defer get.Body.Close()
+	var cached layerCache
+	if err := json.NewDecoder(get.Body).Decode(&cached); err != nil {
+		return nil, fmt.Errorf("decoding layer cache: %w", err)
+	}
+	return &cached, nil
 }
 
 // countProgress writes the byte and file counters to DynamoDB every second
@@ -250,11 +310,14 @@ func (d *downloader) countProgress(ctx context.Context, byteCounter, fileCounter
 
 type CountReader struct {
 	io.Reader
-	count int64
+	count        int64
+	readDuration time.Duration
 }
 
 func (c *CountReader) Read(p []byte) (n int, err error) {
+	started := time.Now()
 	n, err = c.Reader.Read(p)
+	c.readDuration += time.Since(started)
 	atomic.AddInt64(&c.count, int64(n))
 	return
 }

@@ -641,7 +641,11 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 		return nil
 	}
 
-	indexPath, err := h.downloadGzipIndex(ctx, entry.Layer)
+	indexKey := entry.GzipIndex
+	if indexKey == "" {
+		indexKey = fmt.Sprintf("layers/%s/index.gzi", entry.Layer)
+	}
+	indexPath, err := h.downloadGzipIndex(ctx, indexKey)
 	if err != nil {
 		return err
 	}
@@ -697,10 +701,10 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 
 // downloadGzipIndex downloads a layer's gztool index to a temporary file and
 // returns its path. The caller must remove the file.
-func (h *handler) downloadGzipIndex(ctx context.Context, layer string) (string, error) {
+func (h *handler) downloadGzipIndex(ctx context.Context, key string) (string, error) {
 	get, err := h.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: &h.bucket,
-		Key:    aws.String(fmt.Sprintf("layers/%s/index.gzi", layer)),
+		Key:    &key,
 	})
 	if err != nil {
 		return "", fmt.Errorf("getting gzip index: %w", err)

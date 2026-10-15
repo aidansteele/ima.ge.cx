@@ -17,6 +17,8 @@ const WhiteoutOpaqueDir = ".wh..wh..opq"
 type EntryWithLayer struct {
 	targzi.Entry
 	Layer string
+	// Immutable gzip index paired with the spans in this entry. Empty for legacy indexes.
+	GzipIndex string `json:",omitempty"`
 	// For directories: the total size and number of the regular files
 	// beneath them in the final filesystem.
 	DirSize  int64 `json:",omitempty"`

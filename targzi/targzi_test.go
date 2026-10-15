@@ -1,6 +1,9 @@
 package targzi
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -11,10 +14,69 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/stretchr/testify/require"
+	"io"
+	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 )
+
+func TestIndexRangeRoundTrip(t *testing.T) {
+	if _, err := exec.LookPath("gztool"); err != nil {
+		t.Skip("requires gztool on PATH (run with the built Linux layer)")
+	}
+	large := make([]byte, 24<<20)
+	rand.New(rand.NewSource(42)).Read(large)
+	for i := range large {
+		large[i] &= 31 // Dynamic Huffman blocks, not only incompressible stored blocks.
+	}
+	files := []struct {
+		name string
+		body []byte
+	}{{"large.bin", large}, {"pax/" + strings.Repeat("long", 40), []byte("after multiple checkpoints")}, {"empty", nil}}
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	tw := tar.NewWriter(gz)
+	for _, f := range files {
+		require.NoError(t, tw.WriteHeader(&tar.Header{Name: f.name, Size: int64(len(f.body)), Mode: 0644}))
+		_, err := tw.Write(f.body)
+		require.NoError(t, err)
+	}
+	require.NoError(t, tw.Close())
+	_, err := gz.Write(make([]byte, 512<<10)) // Padding after the tar EOF must be drained.
+	require.NoError(t, err)
+	require.NoError(t, gz.Close())
+	var count int64
+	// Hide seekability to exercise the HTTP/stdin path.
+	idx, err := BuildIndex(context.Background(), t.TempDir(), struct{ io.Reader }{bytes.NewReader(compressed.Bytes())}, &count)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(files)), count)
+	spans, err := idx.Spans()
+	require.NoError(t, err)
+	require.Greater(t, len(spans), 1)
+	for _, entry := range idx.Entries {
+		var expected []byte
+		for _, f := range files {
+			if f.name == entry.Hdr.Name {
+				expected = f.body
+			}
+		}
+		require.Equal(t, int64(len(expected)), entry.Hdr.Size)
+		if entry.Hdr.Size == 0 {
+			continue
+		}
+		start, end, err := CompressedRange(spans, entry.Spans)
+		require.NoError(t, err)
+		if end == 0 || end >= compressed.Len() {
+			end = compressed.Len() - 1
+		}
+		got, err := idx.Extract(context.Background(), bytes.NewReader(compressed.Bytes()[start-1:end+1]), start, entry.Offset, int(entry.Hdr.Size))
+		require.NoError(t, err)
+		require.True(t, bytes.Equal(expected, got), "range extraction differs for %s", entry.Hdr.Name)
+	}
+}
 
 func TestFileContents(t *testing.T) {
 	ctx := context.Background()
@@ -205,7 +267,7 @@ func TestBuildIndex(t *testing.T) {
 
 	wd, _ := os.Getwd()
 	var fileCount int64
-	index, err := BuildIndex(wd, in, &fileCount)
+	index, err := BuildIndex(context.Background(), wd, in, &fileCount)
 	require.NoError(t, err)
 	require.NotNil(t, index)
 

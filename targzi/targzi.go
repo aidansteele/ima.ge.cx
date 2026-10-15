@@ -2,12 +2,14 @@ package targzi
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-xray-sdk-go/xray"
 	"github.com/klauspost/compress/gzip"
@@ -116,7 +119,8 @@ func Extract(ctx context.Context, gz io.Reader, gzIndexPath string, skipped, unc
 	return stdout.Bytes(), nil
 }
 
-func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
+func BuildIndex(ctx context.Context, root string, gz io.Reader, fileCounter *int64) (*Index, error) {
+	started := time.Now()
 	dir, err := os.MkdirTemp(root, "targzi*")
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
@@ -131,7 +135,9 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 
 	gzIndexPath := fmt.Sprintf("%s/index.gzi", dir)
 
-	cmd := exec.Command("gztool", "-I", gzIndexPath, "-b", "0")
+	// Tar offsets are byte-based; counting newlines wastes a scan of every byte.
+	cmd := exec.CommandContext(ctx, "gztool", "-z", "-I", gzIndexPath, "-b", "0")
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = gz
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
@@ -143,10 +149,19 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("starting gztool: %w", err)
 	}
+	waited := false
+	defer func() {
+		stdout.Close()
+		if !waited {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+	}()
 
 	entries := []*Entry{}
 
-	off := &offsetReporter{Reader: stdout}
+	// Avoid a pipe syscall for every 512-byte tar header.
+	off := &offsetReporter{Reader: bufio.NewReaderSize(stdout, 256<<10)}
 	tr := tar.NewReader(off)
 	for {
 		hdr, err := tr.Next()
@@ -181,33 +196,39 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 
 		atomic.AddInt64(fileCounter, 1)
 	}
+	slog.InfoContext(ctx, "read tar headers", "duration", time.Since(started), "entries", len(entries))
 
+	sortStart := time.Now()
 	sort.Slice(entries, func(i, j int) bool {
 		iname := strings.TrimSuffix(entries[i].Hdr.Name, "/")
-		isplit := strings.Split(iname, "/")
+		idepth := strings.Count(iname, "/")
 
 		jname := strings.TrimSuffix(entries[j].Hdr.Name, "/")
-		jsplit := strings.Split(jname, "/")
+		jdepth := strings.Count(jname, "/")
 
-		if len(isplit) == len(jsplit) {
+		if idepth == jdepth {
 			return iname < jname
 		}
-		return len(isplit) < len(jsplit)
+		return idepth < jdepth
 	})
+	sortDuration := time.Since(sortStart)
 
 	// The tar reader stops at the end-of-archive marker, but gztool keeps
 	// writing any trailing padding. Drain it so gztool can exit; Wait must
 	// not be called before all reads from the pipe have completed.
-	_, err = io.Copy(io.Discard, stdout)
+	_, err = io.Copy(io.Discard, off)
 	if err != nil {
 		return nil, fmt.Errorf("draining gztool output: %w", err)
 	}
 
 	err = cmd.Wait()
+	waited = true
 	if err != nil {
 		return nil, fmt.Errorf("gztool exit: %w", err)
 	}
+	slog.InfoContext(ctx, "finished decoder", "duration", time.Since(started), "sort_duration", sortDuration)
 
+	metadataStart := time.Now()
 	spans, err := Spans(gzIndexPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading index spans: %w", err)
@@ -233,7 +254,10 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 		sort.Ints(entry.Spans)
 	}
 
-	gzw := gzip.NewWriter(findex)
+	gzw, err := gzip.NewWriterLevel(findex, gzip.BestSpeed)
+	if err != nil {
+		return nil, fmt.Errorf("creating file index gzip stream: %w", err)
+	}
 
 	// json.Encoder terminates each value with a newline, producing JSON Lines.
 	enc := json.NewEncoder(gzw)
@@ -253,6 +277,7 @@ func BuildIndex(root string, gz io.Reader, fileCounter *int64) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("closing file index: %w", err)
 	}
+	slog.InfoContext(ctx, "encoded layer metadata", "duration", time.Since(metadataStart), "spans", len(spans))
 
 	return &Index{
 		Entries:       entries,
