@@ -68,6 +68,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 	slog.InfoContext(ctx, "handling concatenator request")
 
 	fileMap := map[string]*layerreader.EntryWithLayer{}
+	stored := map[string]*layerreader.EntryWithLayer{}
 
 	for _, hash := range input.Layers {
 		w := manager.NewWriteAtBuffer(nil)
@@ -95,12 +96,23 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 				return nil, fmt.Errorf("unmarshalling entry: %w", err)
 			}
 
-			applyEntry(ctx, fileMap, e, hash.String())
+			mergeEntry(ctx, fileMap, stored, e, hash.String())
 		}
 	}
 
 	addDirectorySizes(fileMap)
+	// Publish hidden data first so a newly completed index always has both views.
+	if _, err := ll.uploadIndex(ctx, input, "hidden-index.json.gz", hiddenEntries(fileMap, stored)); err != nil {
+		return nil, err
+	}
+	upload, err := ll.uploadIndex(ctx, input, "index.json.gz", fileMap)
+	if err != nil {
+		return nil, err
+	}
+	return &concatenatorOutput{Key: aws.ToString(upload.Key), VersionId: aws.ToString(upload.VersionID)}, nil
+}
 
+func (ll *concatenator) uploadIndex(ctx context.Context, input *concatenatorInput, filename string, fileMap map[string]*layerreader.EntryWithLayer) (*manager.UploadOutput, error) {
 	arr := make([]*layerreader.EntryWithLayer, 0, len(fileMap))
 	for _, e := range fileMap {
 		arr = append(arr, e)
@@ -129,17 +141,59 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 
 	upload, err := ll.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket: &ll.bucket,
-		Key:    aws.String(fmt.Sprintf("images/%s/%s/index.json.gz", input.Key.Repo, input.Key.Digest)),
+		Key:    aws.String(fmt.Sprintf("images/%s/%s/%s", input.Key.Repo, input.Key.Digest, filename)),
 		Body:   buf,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("uploading combined index: %w", err)
 	}
 
-	return &concatenatorOutput{
-		Key:       aws.ToString(upload.Key),
-		VersionId: aws.ToString(upload.VersionID),
-	}, nil
+	return upload, nil
+}
+
+// Keep only the latest stored header for each path, independently of whiteouts.
+func mergeEntry(ctx context.Context, final, stored map[string]*layerreader.EntryWithLayer, e targzi.Entry, layer string) {
+	if !strings.HasPrefix(filepath.Base(e.Hdr.Name), layerreader.WhiteoutPrefix) {
+		stored[strings.TrimSuffix(e.Hdr.Name, "/")] = &layerreader.EntryWithLayer{Entry: e, Layer: layer}
+	}
+	applyEntry(ctx, final, e, layer)
+}
+
+func hiddenEntries(final, stored map[string]*layerreader.EntryWithLayer) map[string]*layerreader.EntryWithLayer {
+	present := map[string]bool{}
+	for name := range final {
+		name = strings.TrimSuffix(name, "/")
+		present[name] = true
+		for dir := filepath.Dir(name); dir != "." && dir != "/"; dir = filepath.Dir(dir) {
+			present[dir] = true
+		}
+	}
+	hidden := map[string]*layerreader.EntryWithLayer{}
+	for path, entry := range stored {
+		// Directories are included only as navigation to hidden non-directory entries.
+		if present[path] || entry.Hdr.Typeflag == tar.TypeDir {
+			continue
+		}
+		copy := *entry
+		hidden[entry.Hdr.Name] = &copy
+		for dir := filepath.Dir(path); dir != "." && dir != "/"; dir = filepath.Dir(dir) {
+			name := dir + "/"
+			if _, ok := hidden[name]; ok {
+				continue
+			}
+			parent := filepath.Dir(dir)
+			if parent == "." {
+				parent = "/"
+			} else if parent != "/" {
+				parent += "/"
+			}
+			hidden[name] = &layerreader.EntryWithLayer{Entry: targzi.Entry{
+				Hdr: tar.Header{Name: name, Typeflag: tar.TypeDir}, Parent: parent,
+			}}
+		}
+	}
+	addDirectorySizes(hidden)
+	return hidden
 }
 
 // applyEntry merges one entry from layer into fileMap, which holds the

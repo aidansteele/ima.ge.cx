@@ -5,10 +5,13 @@ import (
 	"browseimage/layerreader"
 	"browseimage/targzi"
 	"context"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestApplyEntryWhiteouts(t *testing.T) {
@@ -68,4 +71,55 @@ func TestAddDirectorySizes(t *testing.T) {
 	assert.Equal(t, [2]int64{1205, 3}, got("usr/lib/"))
 	assert.Equal(t, [2]int64{4, 1}, got("usr/libexec/"))
 	assert.Equal(t, [2]int64{0, 0}, got("usr/lib/a.so"))
+}
+
+func TestHiddenEntries(t *testing.T) {
+	final := map[string]*layerreader.EntryWithLayer{}
+	stored := map[string]*layerreader.EntryWithLayer{}
+	add := func(layer, name string, size int64, kind byte) {
+		parent := filepath.Dir(strings.TrimSuffix(name, "/"))
+		if parent == "." {
+			parent = "/"
+		} else {
+			parent += "/"
+		}
+		mergeEntry(context.Background(), final, stored, targzi.Entry{
+			Hdr:    tar.Header{Name: name, Size: size, Typeflag: kind},
+			Offset: 123, Spans: []int{2, 3}, Parent: parent,
+		}, layer)
+	}
+	for _, name := range []string{"gone/deep/file", "gone/link", "gone2/live", "opaque/old", "opaque2/live", "recreated", "overwritten", "same", "latest"} {
+		add("lower", name, 7, tar.TypeReg)
+	}
+	add("lower", "empty/", 0, tar.TypeDir)
+	add("middle", "latest", 11, tar.TypeReg)
+	add("middle", "gone/link", 0, tar.TypeSymlink)
+	add("upper", "same", 9, tar.TypeReg)
+	add("upper", "opaque/early", 90, tar.TypeReg)
+	for _, name := range []string{".wh.gone", "opaque/.wh..wh..opq", ".wh.recreated", ".wh.same", ".wh.latest", ".wh.empty"} {
+		add("upper", name, 0, tar.TypeReg)
+	}
+	add("upper", "opaque/new", 100, tar.TypeReg)
+	add("upper", "recreated", 20, tar.TypeReg)
+	add("upper", "overwritten", 30, tar.TypeReg)
+	hidden := hiddenEntries(final, stored)
+	require.Len(t, hidden, 7)
+	for _, name := range []string{"gone/deep/file", "gone/link", "opaque/old", "latest", "gone/", "gone/deep/", "opaque/"} {
+		require.Contains(t, hidden, name)
+	}
+	assert.Equal(t, int64(7), hidden["gone/"].DirSize)
+	assert.Equal(t, int64(1), hidden["gone/"].DirFiles)
+	assert.Equal(t, int64(7), hidden["gone/deep/"].DirSize)
+	assert.Equal(t, "/", hidden["gone/"].Parent)
+	assert.Equal(t, "gone/", hidden["gone/deep/"].Parent)
+	assert.Equal(t, "gone/deep/", hidden["gone/deep/file"].Parent)
+	assert.Equal(t, int64(7), hidden["opaque/"].DirSize) // excludes live files
+	assert.Equal(t, "middle", hidden["latest"].Layer)
+	assert.Equal(t, int64(11), hidden["latest"].Hdr.Size)
+	assert.Equal(t, 123, hidden["latest"].Offset)
+	assert.Equal(t, []int{2, 3}, hidden["latest"].Spans)
+	assert.Contains(t, final, "gone2/live")
+	assert.Contains(t, final, "opaque/early")
+	assert.Contains(t, final, "opaque2/live")
+	assert.Contains(t, final, "same")
 }

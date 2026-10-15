@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,5 +108,47 @@ func TestImageMetadata(t *testing.T) {
 			assert.JSONEq(t, string(config), string(output.Config))
 			assert.JSONEq(t, string(manifest), string(output.Manifest))
 		})
+	}
+}
+
+func TestHiddenIndexAPI(t *testing.T) {
+	const digest = "sha256:030eaf505bc7d39bfe1c485762603a95b5d43277f98cd3334d85e84547073abb"
+	for _, endpoint := range []string{"dir", "file"} {
+		for _, hidden := range []string{"", "false", "true"} {
+			t.Run(endpoint+"/"+hidden, func(t *testing.T) {
+				filename := "index.json.gz"
+				status := http.StatusNotFound
+				message := "image has not been indexed"
+				if hidden == "true" {
+					filename = "hidden-index.json.gz"
+					status = http.StatusConflict
+					message = "Hidden files are unavailable for this older index; the image must be reindexed."
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/bucket/images/example/app/"+digest+"/"+filename {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(http.StatusNotFound)
+					w.Write([]byte(`<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>`))
+				}))
+				defer server.Close()
+				h := &handler{bucket: "bucket", s3: s3.New(s3.Options{
+					Region: "us-east-1", Credentials: aws.AnonymousCredentials{},
+					EndpointResolver: s3.EndpointResolverFromURL(server.URL), UsePathStyle: true,
+				})}
+				q := url.Values{"image": {"example/app"}, "digest": {digest}, "hidden": {hidden}, "path": {"gone"}}
+				w := httptest.NewRecorder()
+				r := httptest.NewRequest(http.MethodGet, "/api/"+endpoint+"?"+q.Encode(), nil)
+				fn := h.handleListDirectory
+				if endpoint == "file" {
+					fn = h.handleFileContents
+				}
+				handleErrors(fn)(w, r)
+				assert.Equal(t, status, w.Code)
+				assert.Contains(t, w.Body.String(), message)
+			})
+		}
 	}
 }

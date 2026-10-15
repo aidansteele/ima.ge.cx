@@ -551,6 +551,21 @@ func indexKey(repo string, ref name.Digest) string {
 	return fmt.Sprintf("images/%s/%s/index.json.gz", repo, ref.DigestStr())
 }
 
+func requestIndexKey(repo string, ref name.Digest, q url.Values) string {
+	key := indexKey(repo, ref)
+	if q.Get("hidden") == "true" {
+		return strings.TrimSuffix(key, "index.json.gz") + "hidden-index.json.gz"
+	}
+	return key
+}
+
+func missingIndexError(q url.Values) error {
+	if q.Get("hidden") == "true" {
+		return withStatus(http.StatusConflict, errors.New("Hidden files are unavailable for this older index; the image must be reindexed."))
+	}
+	return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
+}
+
 func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -574,10 +589,13 @@ func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) er
 	defer emf.Emit(msi)
 
 	query := "SELECT * FROM s3object s WHERE s.Parent = " + s3select.Quote(path)
-	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, indexKey(repo, ref), query)
+	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, requestIndexKey(repo, ref, q), query)
 	if isNoSuchKey(err) {
 		msi["StatusCode"] = emf.Dimension("404")
-		return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
+		if q.Get("hidden") == "true" {
+			msi["StatusCode"] = emf.Dimension("409")
+		}
+		return missingIndexError(q)
 	}
 	if err != nil {
 		msi["StatusCode"] = emf.Dimension("500")
@@ -599,9 +617,9 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 	path := q.Get("path")
 
 	query := "SELECT * FROM s3object s WHERE s.Hdr.Name = " + s3select.Quote(path)
-	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, indexKey(repo, ref), query)
+	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, requestIndexKey(repo, ref, q), query)
 	if isNoSuchKey(err) {
-		return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
+		return missingIndexError(q)
 	}
 	if err != nil {
 		return fmt.Errorf("querying file index: %w", err)
