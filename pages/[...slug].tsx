@@ -3,7 +3,7 @@ import {useEffect, useState} from 'react'
 import Link from "next/link";
 import {Loader} from "@mantine/core";
 import {Prism} from "@mantine/prism";
-import {IconAlertTriangle, IconCpu} from "@tabler/icons";
+import {IconAlertTriangle, IconCpu, IconEyeOff} from "@tabler/icons";
 import {ImageInfo, useImageInfo, useImageOptions} from "../src/imageHooks";
 import {useHashPath} from "../src/useHashPath";
 import {TopBar} from "../components/topBar";
@@ -27,7 +27,7 @@ const tabs = [
 type Tab = typeof tabs[number]["value"];
 
 function Workspace({info, image, digest}: { info: ImageInfo, image: string, digest: string }) {
-  const [selectedPath, setSelectedPath] = useHashPath();
+  const [selectedPath, setSelectedPath, hidden, setHidden] = useHashPath();
   // The file the page was opened with, which is scrolled into view once its directory loads.
   const [linkedPath] = useState(selectedPath);
   const [tab, setTab] = useState<Tab>("files");
@@ -55,10 +55,21 @@ function Workspace({info, image, digest}: { info: ImageInfo, image: string, dige
           <button aria-pressed={!showTree} disabled={!selectedPath} onClick={() => setShowTree(false)}>View file</button>
         </nav>
         <aside className="pane tree-pane">
-          <FileTree image={image} digest={digest} focusedPath={selectedPath} scrollToPath={linkedPath} onSelect={selectFile}/>
+          <div className={`tree-filter${hidden ? " active" : ""}`}>
+            <label className="hidden-toggle">
+              <IconEyeOff size={18} aria-hidden="true"/>
+              <span>Only show hidden files</span>
+              <input type="checkbox" role="switch" checked={hidden} aria-describedby="hidden-help"
+                     onChange={e => setHidden(e.currentTarget.checked)}/>
+              <span className="switch-track" aria-hidden="true"/>
+            </label>
+            <p id="hidden-help">Deleted from the image, still stored in layers.</p>
+          </div>
+          <FileTree key={String(hidden)} image={image} digest={digest} hidden={hidden} focusedPath={selectedPath}
+                    scrollToPath={linkedPath} onSelect={selectFile}/>
         </aside>
         <section className="pane viewer-pane">
-          <FileViewer image={image} digest={digest} path={selectedPath} onSelect={selectFile}/>
+          <FileViewer image={image} digest={digest} hidden={hidden} path={selectedPath} onSelect={selectFile}/>
         </section>
       </div>}
       {tab === "layers" && <Layers info={info}/>}

@@ -17,6 +17,12 @@ first access; the page shows progress while indexing runs.
 - **Files:** expand directories, inspect file contents and permissions, follow
   symbolic links, or download files. Text files support syntax highlighting,
   folding and search with ⌘F / Ctrl+F inside the viewer.
+- **Hidden files:** switch on **Only show hidden files** above the tree to inspect
+  files deleted from the final image but still stored in its layers. This is not
+  a dotfile filter or version history: paths that still exist are excluded, and
+  each absent path shows its latest stored version. Tree sizes count only hidden
+  files in this view. The switch clears the selection; copied links preserve
+  hidden mode with `?hidden=true`.
 - **Directory sizes:** see uncompressed sizes and file counts, with bars showing
   each entry's share of its parent directory. Totals describe regular files in
   the final filesystem after layer deletions; symlinks and hard links do not
@@ -114,6 +120,12 @@ build and deployment to [ima.ge.cx](https://ima.ge.cx).
 
 Set `NEXT_PUBLIC_API_BASE_URL` in the Amplify branch's environment when targeting
 a non-default backend. Backend changes are deployed separately.
+
+Deploy backend hidden-index support before this frontend. Hidden browsing uses
+`hidden=true` on both `/api/dir` and `/api/file`. Previously indexed images need
+their combined indexes rebuilt to gain this view; until then the API returns an
+explicit unavailable message (HTTP 409), not an empty hidden-files result. No
+automatic reindexing is triggered by the toggle.
 
 Rich image previews use the backend's read-only `GET /api/metadata?image=…&digest=…`
 endpoint, which returns the existing `/api/info` response or 404 without starting

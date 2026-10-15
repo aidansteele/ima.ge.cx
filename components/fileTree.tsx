@@ -1,6 +1,6 @@
 import {CSSProperties, MouseEvent, useEffect, useRef, useState} from "react";
 import {Loader} from "@mantine/core";
-import {IconChevronRight, IconFile, IconFolder, IconLink} from "@tabler/icons";
+import {IconChevronRight, IconEyeOff, IconFile, IconFolder, IconLink} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
 import {DirectoryEntry, entrySize, useDirectory} from "../src/imageHooks";
 import {hashFromPath} from "../src/useHashPath";
@@ -13,6 +13,7 @@ export const TypeDirectory = 53; // tar.TypeDir ('5')
 interface TreeProps {
   image: string;
   digest: string;
+  hidden: boolean;
   // The selected path, which is highlighted and whose ancestor directories are expanded.
   focusedPath: string;
   // A file to scroll into view when its row first appears (the file a link pointed at).
@@ -41,8 +42,8 @@ export function FileTree(props: TreeProps) {
 }
 
 function DirectoryChildren(props: TreeProps & { dir: string, depth: number }) {
-  const {image, digest, dir, depth} = props;
-  const {dirents, isLoading, error} = useDirectory(image, digest, dir, true);
+  const {image, digest, dir, depth, hidden} = props;
+  const {dirents, isLoading, error} = useDirectory(image, digest, dir, true, hidden);
 
   if (isLoading) {
     return <div className="tree-status" style={indent(depth)}><Loader size={12}/> Loading…</div>;
@@ -51,7 +52,9 @@ function DirectoryChildren(props: TreeProps & { dir: string, depth: number }) {
     return <div className="tree-status error" style={indent(depth)}>{error.message}</div>;
   }
   if (dirents.length === 0) {
-    return <div className="tree-status" style={indent(depth)}>Empty directory</div>;
+    return <div className="tree-status" style={indent(depth)}>
+      {hidden && dir === "/" ? "No hidden files in this image." : "Empty directory"}
+    </div>;
   }
 
   // Each entry's bar shows its share of this directory's total size.
@@ -97,13 +100,13 @@ function DirectoryRow(props: RowProps) {
       <IconFolder size={16} className="tree-icon folder"/>
       <span className="tree-name">{displayName(entry.path, dir)}</span>
       <Size entry={entry} share={share}/>
-      <LayerChip digest={entry.layer}/>
+      {entry.layer && <LayerChip digest={entry.layer}/>}
     </button>
     {expanded && <DirectoryChildren {...props} dir={entry.path} depth={depth + 1}/>}
   </>;
 }
 
-function FileRow({entry, dir, depth, focusedPath, scrollToPath, onSelect, share}: RowProps) {
+function FileRow({entry, dir, depth, focusedPath, scrollToPath, onSelect, share, hidden}: RowProps) {
   const row = useRef<HTMLAnchorElement>(null);
   const selected = entry.path === focusedPath;
   const symlink = entry.typ === TypeSymlink;
@@ -120,9 +123,11 @@ function FileRow({entry, dir, depth, focusedPath, scrollToPath, onSelect, share}
   };
 
   return <a ref={row} href={hashFromPath(entry.path)} onClick={onClick} role="treeitem" aria-selected={selected}
-            className={`tree-row${selected ? " selected" : ""}`} style={indent(depth)}>
+            className={`tree-row${selected ? " selected" : ""}${hidden ? " hidden-file" : ""}`} style={indent(depth)}
+            title={hidden ? "Deleted from the final image; retained in its original layer" : undefined}>
     <span className="tree-chevron-space"/>
-    {symlink ? <IconLink size={16} className="tree-icon"/> : <IconFile size={16} className="tree-icon"/>}
+    {hidden ? <IconEyeOff size={16} className="tree-icon"/> :
+      symlink ? <IconLink size={16} className="tree-icon"/> : <IconFile size={16} className="tree-icon"/>}
     <span className="tree-name">
       {displayName(entry.path, dir)}
       {entry.linkname && <span className="tree-target"> → {entry.linkname}</span>}

@@ -1,6 +1,6 @@
 import {Fragment, useState} from "react";
 import {Button, CopyButton, Loader} from "@mantine/core";
-import {IconArrowRight, IconCheck, IconDownload, IconFileText, IconFileUnknown, IconFolder, IconLink} from "@tabler/icons";
+import {IconArrowRight, IconCheck, IconDownload, IconEyeOff, IconFileText, IconFileUnknown, IconFolder, IconLink} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
 import {fileUrl, useDirectory, useFileContents} from "../src/imageHooks";
 import {LayerChip} from "./layerChip";
@@ -46,17 +46,19 @@ function Empty({icon, title, children}: { icon: JSX.Element, title: string, chil
   </div>;
 }
 
-export function FileViewer({image, digest, path, onSelect}: { image: string, digest: string, path: string, onSelect: (path: string) => void }) {
+export function FileViewer({image, digest, path, onSelect, hidden}: { image: string, digest: string, path: string, onSelect: (path: string) => void, hidden: boolean }) {
   // The tree has already listed the parent directory, so this reuses its cached response.
-  const dir = useDirectory(image, digest, parentDir(path), path !== "");
+  const dir = useDirectory(image, digest, parentDir(path), path !== "", hidden);
   const entry = dir.dirents.find(e => e.path === path || e.path === `${path}/`);
   const isFile = !!entry && entry.typ !== TypeDirectory && entry.typ !== TypeSymlink && entry.size > 0;
-  const contents = useFileContents(image, digest, path, isFile);
+  const contents = useFileContents(image, digest, path, isFile, hidden);
   const [downloading, setDownloading] = useState(false);
 
   if (!path) {
-    return <Empty icon={<IconFileText size={36}/>} title="Select a file to view it">
-      The address bar always links to the file you&apos;re viewing, so you can share it.
+    return <Empty icon={hidden ? <IconEyeOff size={36}/> : <IconFileText size={36}/>}
+                  title={hidden ? "Inspect files left behind" : "Select a file to view it"}>
+      {hidden ? "These files were deleted from the final image, but their contents remain in earlier layers. Select one to inspect or download it." :
+        "The address bar always links to the file you're viewing, so you can share it."}
     </Empty>;
   }
 
@@ -69,7 +71,9 @@ export function FileViewer({image, digest, path, onSelect}: { image: string, dig
   } else if (dir.error) {
     body = <Empty icon={<IconFileUnknown size={36}/>} title="Couldn't load this directory">{dir.error.message}</Empty>;
   } else if (!entry) {
-    body = <Empty icon={<IconFileUnknown size={36}/>} title="Not in this image">/{path} doesn&apos;t exist in this image.</Empty>;
+    body = <Empty icon={<IconFileUnknown size={36}/>} title={hidden ? "Not a hidden file" : "Not in this image"}>
+      /{path} {hidden ? "is not in the hidden-files view." : "doesn't exist in this image."}
+    </Empty>;
   } else if (entry.typ === TypeDirectory) {
     body = <Empty icon={<IconFolder size={36}/>} title="This is a directory">
       {entry.dirFiles ? `${formatBytes(entry.dirSize, 1)} in ${entry.dirFiles.toLocaleString()} files. ` : "It contains no files. "}
@@ -111,7 +115,7 @@ export function FileViewer({image, digest, path, onSelect}: { image: string, dig
         <Button size="xs" leftIcon={<IconDownload size={14}/>} disabled={!isFile} loading={downloading}
                 onClick={() => {
                   setDownloading(true);
-                  download(fileUrl(image, digest, path), name).finally(() => setDownloading(false));
+                  download(fileUrl(image, digest, path, hidden), name).finally(() => setDownloading(false));
                 }}>
           Download
         </Button>
@@ -119,8 +123,14 @@ export function FileViewer({image, digest, path, onSelect}: { image: string, dig
     </div>
     {entry && <div className="viewer-meta">
       <span>{formatBytes(entry.typ === TypeDirectory ? entry.dirSize : entry.size, 1)}</span>
-      <span>from layer <LayerChip digest={entry.layer}/></span>
-      <span>mode {(entry.mode & 0o7777).toString(8).padStart(4, "0")}</span>
+      {entry.layer && <>
+        <span>from layer <LayerChip digest={entry.layer}/></span>
+        <span>mode {(entry.mode & 0o7777).toString(8).padStart(4, "0")}</span>
+      </>}
+    </div>}
+    {hidden && entry && entry.typ !== TypeDirectory && <div className="hidden-notice">
+      <IconEyeOff size={18} aria-hidden="true"/>
+      <span><strong>Hidden file</strong> · Deleted from the final image. Contents remain in the original layer.</span>
     </div>}
     <div className="viewer-body">{body}</div>
   </div>;

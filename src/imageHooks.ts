@@ -19,12 +19,12 @@ function apiUrl(endpoint: string, params: Record<string, string>) {
   return `${ApiBaseUrl}${endpoint}?${new URLSearchParams(params)}`;
 }
 
-export function fileUrl(image: string, digest: string, path: string) {
-  return apiUrl('file', {image, digest, path});
+export function fileUrl(image: string, digest: string, path: string, hidden = false) {
+  return apiUrl('file', {image, digest, path, ...(hidden ? {hidden: "true"} : {})});
 }
 
-export function useFileContents(image: string, digest: string, path: string, enabled = true) {
-  return useSWRImmutable<string, Error>(enabled && path !== "" ? fileUrl(image, digest, path) : null, fetchText);
+export function useFileContents(image: string, digest: string, path: string, enabled = true, hidden = false) {
+  return useSWRImmutable<string, Error>(enabled && path !== "" ? fileUrl(image, digest, path, hidden) : null, fetchText);
 }
 
 export interface DirectoryEntry {
@@ -67,12 +67,12 @@ export interface ApiResponseDirectoryEntry {
   };
 }
 
-export function useDirectory(image: string, digest: string, path: string, load: boolean) {
-  const key = apiUrl('dir', {image, digest, path});
+export function useDirectory(image: string, digest: string, path: string, load: boolean, hidden = false) {
+  const key = apiUrl('dir', {image, digest, path, ...(hidden ? {hidden: "true"} : {})});
   const {data, error, isLoading} = useSWRImmutable<ApiResponseDirectoryEntry[], Error>(load ? key : null, fetchJson);
 
   const dirents: DirectoryEntry[] = (data ?? []).map(src => ({
-    id: `${src.Offset}-${src.Layer}`,
+    id: `${src.Hdr.Name}-${src.Offset}-${src.Layer}`,
     path: src.Hdr.Name,
     size: src.Hdr.Size,
     typ: src.Hdr.Typeflag,
