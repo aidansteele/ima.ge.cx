@@ -1,0 +1,3 @@
+[submodule "targzi/gztool"]
+	path = targzi/gztool
+	url = https://github.com/circulosmeos/gztool.git

@@ -1,0 +1,57 @@
+Conditions:
+  PrimaryRegion: !Equals [!Ref AWS::Region, us-west-2]
+
+Resources:
+  Table:
+    Condition: PrimaryRegion
+    Type: AWS::DynamoDB::GlobalTable
+    Properties:
+      TableName: !Ref AWS::StackName
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Replicas:
+        - Region: us-west-2
+          Tags:
+            - Key: stack-id
+              Value: !Ref AWS::StackId
+        - Region: ap-southeast-2
+          Tags:
+            - Key: stack-id
+              Value: !Ref AWS::StackId
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+      CorsConfiguration:
+        CorsRules:
+          - Id: AllowGet
+            AllowedHeaders: ["*"]
+            AllowedMethods: [GET]
+            AllowedOrigins: ["*"]
+            MaxAge: 86400
+      Tags:
+        - Key: stack-id
+          Value: !Ref AWS::StackId
+
+Outputs:
+  Table:
+    Value: !Ref Table
+  Bucket:
+    Value: !Ref Bucket

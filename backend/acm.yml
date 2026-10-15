@@ -1,0 +1,28 @@
+Parameters:
+  HostedZoneId:
+    Type: String
+    Default: Z07056651VSLMB7KOBGAE
+  Domain:
+    Type: String
+    Default: api.ima.ge.cx
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref Domain
+      ValidationMethod: DNS
+      SubjectAlternativeNames:
+        - !Sub "*.${Domain}"
+      DomainValidationOptions:
+        - DomainName: !Ref Domain
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: stack:name
+          Value: !Ref AWS::StackId
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate
+    Export:
+      Name: CertificateArn

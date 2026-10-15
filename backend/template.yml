@@ -1,0 +1,205 @@
+Transform:
+  - AWS::LanguageExtensions
+  - AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Architectures: [ arm64 ]
+    AutoPublishAlias: live
+    AutoPublishAliasAllProperties: true
+    PropagateTags: true
+    Runtime: provided.al2
+    Handler: bootstrap
+    MemorySize: 1769
+    Layers:
+      - !Sub arn:aws:lambda:${AWS::Region}:580247275435:layer:LambdaInsightsExtension-Arm64:5
+    Tags:
+      stack-id: !Ref AWS::StackId
+    Tracing: Active
+
+Resources:
+  Table:
+    Type: AWS::DynamoDB::GlobalTable
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      Replicas:
+        - Region: us-west-2
+          Tags:
+            - Key: stack-id
+              Value: !Ref AWS::StackId
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+#      LifecycleConfiguration:
+#        Rules:
+#          - Id: Expire
+#            Status: Enabled
+#            ExpirationInDays: 90
+      CorsConfiguration:
+        CorsRules:
+          - Id: AllowGet
+            AllowedHeaders: ["*"]
+            AllowedMethods: [GET]
+            AllowedOrigins: ["*"]
+            MaxAge: 86400
+      Tags:
+        - Key: stack-id
+          Value: !Ref AWS::StackId
+
+  GztoolLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      BuildMethod: makefile
+      BuildArchitecture: arm64
+    Properties:
+      CompatibleArchitectures: [arm64]
+      ContentUri: targzi
+      RetentionPolicy: Retain
+
+  TheLambda:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: ./thelambda
+      Timeout: 90
+      Environment:
+        Variables:
+          TABLE: !Ref Table
+          BUCKET: !Ref Bucket
+          MACHINE: !Ref MachineAliaslive
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowCredentials: true
+          AllowMethods: ["*"]
+          AllowOrigins: ["*"]
+          MaxAge: 86400
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - S3CrudPolicy:
+            BucketName: !Ref Bucket
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt Machine.Name
+      Layers:
+        - !Ref GztoolLayer
+
+  Concatenator:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: ./concatenator
+      Timeout: 90
+      MemorySize: 3538
+      Environment:
+        Variables:
+          BUCKET: !Ref Bucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref Bucket
+
+  Finalizer:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: ./finalizer
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  LayerLister:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: ./layer_lister
+      Timeout: 30
+      Environment:
+        Variables:
+          TABLE: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+
+  LayerReader:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: ./layerreader/remote
+      Timeout: 900
+      MemorySize: 3538
+      Environment:
+        Variables:
+          TABLE: !Ref Table
+          BUCKET: !Ref Bucket
+          LAYER_CACHE: "true"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - S3CrudPolicy:
+            BucketName: !Ref Bucket
+      Layers:
+        - !Ref GztoolLayer
+
+  Machine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub ${AWS::StackName}-machine
+      AutoPublishAlias: live
+      Type: STANDARD
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: ""
+      Tags:
+        stack-id: !Ref AWS::StackId
+      PropagateTags: true
+      Tracing:
+        Enabled: true
+      DefinitionUri: machine.asl.yml
+      DefinitionSubstitutions:
+        Concatenator: !Ref Concatenator.Alias
+        LayerReader: !Ref LayerReader.Alias
+        LayerLister: !Ref LayerLister.Alias
+        Finalizer: !Ref Finalizer.Alias
+
+Outputs:
+  TheLambda:
+    Value: !Ref TheLambda.Version
+  TheLambdaUrl:
+    Value: !GetAtt TheLambdaUrl.FunctionUrl
+  Table:
+    Value: !Ref Table
+  Bucket:
+    Value: !Ref Bucket
+  Machine:
+    Value: !Ref Machine
+  Finalizer:
+    Value: !Ref Finalizer.Version
+  LayerReader:
+    Value: !Ref LayerReader.Version
+  Concatenator:
+    Value: !Ref Concatenator.Version

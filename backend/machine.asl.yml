@@ -1,0 +1,154 @@
+QueryLanguage: JSONata
+StartAt: Get image layers
+States:
+  Get image layers:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${LayerLister}
+      Payload:
+        Repo: "{% $states.input.Repo %}"
+        Digest: "{% $states.input.Digest %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output:
+      Repo: "{% $states.input.Repo %}"
+      Digest: "{% $states.input.Digest %}"
+      ImageLayers: "{% $states.result.Payload %}"
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        Output:
+          Error: "{% $states.errorOutput %}"
+    Next: For each layer
+
+  For each layer:
+    Type: Map
+    Items: "{% $states.input.ImageLayers.Layers %}"
+    ItemSelector:
+      Key:
+        Repo: "{% $states.input.Repo %}"
+        Digest: "{% $states.input.Digest %}"
+      Layer: "{% $states.context.Map.Item.Value %}"
+      ExecutionName: "{% $states.context.Execution.Name %}"
+    ItemProcessor:
+      StartAt: Index layer tar.gz
+      States:
+        Index layer tar.gz:
+          Type: Task
+          Resource: arn:aws:states:::lambda:invoke
+          Arguments:
+            FunctionName: ${LayerReader}
+            Payload: "{% $states.input %}"
+          Output: "{% $states.result.Payload %}"
+          Retry:
+            - BackoffRate: 2
+              ErrorEquals:
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 2
+              MaxAttempts: 6
+          End: true
+    Output:
+      Repo: "{% $states.input.Repo %}"
+      Digest: "{% $states.input.Digest %}"
+      ImageLayers: "{% $states.input.ImageLayers %}"
+      Indexes: "{% $states.result %}"
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        Output:
+          Error: "{% $states.errorOutput %}"
+    Next: Concatenate indexes
+
+  Concatenate indexes:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${Concatenator}
+      Payload:
+        Key:
+          Repo: "{% $states.input.Repo %}"
+          Digest: "{% $states.input.Digest %}"
+        Layers: "{% $states.input.ImageLayers.Layers %}"
+        Indexes: "{% $states.input.Indexes %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output: "{% $states.result.Payload %}"
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Report failure
+        Output:
+          Error: "{% $states.errorOutput %}"
+    Next: Report success
+
+  Report success:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${Finalizer}
+      Payload:
+        Payload: "{% $states.context.Execution.Input %}"
+        Meta:
+          ExecutionId: "{% $states.context.Execution.Name %}"
+          StartTime: "{% $states.context.Execution.StartTime %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output: "{% $states.result.Payload %}"
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    End: true
+
+  Report failure:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    Arguments:
+      FunctionName: ${Finalizer}
+      Payload:
+        Payload: "{% $states.context.Execution.Input %}"
+        Meta:
+          Error: "{% $states.input.Error %}"
+          ExecutionId: "{% $states.context.Execution.Name %}"
+          StartTime: "{% $states.context.Execution.StartTime %}"
+        ExecutionName: "{% $states.context.Execution.Name %}"
+    Output: "{% $states.result.Payload %}"
+    Retry:
+      - BackoffRate: 2
+        ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 6
+    Next: Fail
+
+  Fail:
+    Type: Fail
