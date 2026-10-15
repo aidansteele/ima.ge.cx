@@ -1,4 +1,4 @@
-import {CSSProperties, MouseEvent, useEffect, useRef, useState} from "react";
+import React, {CSSProperties, MouseEvent, useEffect, useRef, useState} from "react";
 import {Loader} from "@mantine/core";
 import {IconChevronRight, IconEyeOff, IconFile, IconFolder, IconLink} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
@@ -64,7 +64,8 @@ function DirectoryChildren(props: TreeProps & { dir: string, depth: number }) {
 
   return <>
     {sorted.map(child => child.typ === TypeDirectory ?
-      <DirectoryRow {...props} key={child.id} entry={child} share={total ? entrySize(child) / total : 0}/> :
+      <DirectoryRow {...props} key={child.id} entry={child} autoExpand={dirents.length === 1}
+                    share={total ? entrySize(child) / total : 0}/> :
       <FileRow {...props} key={child.id} entry={child} share={total ? entrySize(child) / total : 0}/>
     )}
   </>;
@@ -83,10 +84,11 @@ function Size({entry, share}: { entry: DirectoryEntry, share: number }) {
   </>;
 }
 
-function DirectoryRow(props: RowProps) {
-  const {entry, dir, depth, focusedPath, share} = props;
+function DirectoryRow(props: RowProps & { autoExpand: boolean }) {
+  const {entry, dir, depth, focusedPath, share, autoExpand} = props;
   const containsFocus = within(focusedPath, entry.path);
-  const [expanded, setExpanded] = useState(containsFocus);
+  // Only choose the initial state: users can still collapse an auto-opened row.
+  const [expanded, setExpanded] = useState(containsFocus || autoExpand);
 
   // Reveal the selected file when it changes, e.g. when a link is pasted into this tab.
   useEffect(() => {
