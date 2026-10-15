@@ -4,6 +4,7 @@ import {Select, Tooltip} from "@mantine/core";
 import {IconBox} from "@tabler/icons";
 import {Platform, useImageOptions, useImageTags} from "../src/imageHooks";
 import {sortTags, splitTag} from "../src/tags";
+import {useTheme} from "../src/theme";
 
 export function platformLabel(p: Platform) {
   const label = [p.os, p.architecture, p.variant].filter(Boolean).join("/");
@@ -17,6 +18,7 @@ const compactSelect = {
 // The image reference as three controls: repository, tag and platform.
 export function ImageRef({image, digest}: { image: string, digest?: string }) {
   const router = useRouter();
+  const {themedPath} = useTheme();
   const {repo, tag} = splitTag(image);
   const hash = () => window.location.hash;
 
@@ -30,9 +32,9 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
   const onlyDigest = options?.Options?.length === 1 ? options.Options[0].Digest : undefined;
   useEffect(() => {
     if (onlyDigest && onlyDigest !== digest) {
-      router.replace(`/${image}@${onlyDigest}${window.location.hash}`);
+      router.replace(themedPath(`/${image}@${onlyDigest}${window.location.hash}`));
     }
-  }, [onlyDigest, digest, image, router]);
+  }, [onlyDigest, digest, image, router, themedPath]);
 
   const platforms = (options?.Options ?? []).map(o => ({value: o.Digest, label: platformLabel(o.Platform)}));
   // A link can pin a digest that the tag no longer points to.
@@ -60,7 +62,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
         value={tag ?? null}
         // Drop the digest so the platform list is looked up for the new tag,
         // but keep the hash so the same file is shown if it exists there.
-        onChange={val => router.push(`/${repo}:${val}${hash()}`)}
+        onChange={val => router.push(themedPath(`/${repo}:${val}${hash()}`))}
       />
     </Tooltip>
     <span className="image-ref-sep">·</span>
@@ -73,7 +75,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
         data={platforms}
         value={digest ?? null}
         // Keep the hash so the same file is shown for the other platform.
-        onChange={val => router.push(`/${image}@${val}${hash()}`)}
+        onChange={val => router.push(themedPath(`/${image}@${val}${hash()}`))}
       />
     </Tooltip>
   </div>;

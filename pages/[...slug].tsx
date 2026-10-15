@@ -16,6 +16,7 @@ import {EnvVars} from "../components/envVars";
 import {ImageIndexingView} from "../components/imageIndexingView";
 import {SocialMetadata} from "../components/socialMetadata";
 import {imageDescription} from "../src/imageMetadata";
+import {useTheme} from "../src/theme";
 
 const tabs = [
   {value: "files", label: "Files"},
@@ -96,6 +97,7 @@ function ImageState({image, digest}: { image: string, digest: string }) {
 }
 
 function PlatformPicker({image}: { image: string }) {
+  const {themedPath} = useTheme();
   const {data} = useImageOptions(image);
   const options = data?.Options ?? [];
 
@@ -104,7 +106,7 @@ function PlatformPicker({image}: { image: string }) {
 
   return <Message icon={<IconCpu size={36}/>} title="Choose a platform">
     <div className="platforms">
-      {options.map(o => <Link key={o.Digest} className="platform" href={`/${image}@${o.Digest}`}>
+      {options.map(o => <Link key={o.Digest} className="platform" href={themedPath(`/${image}@${o.Digest}`)}>
         <span>{platformLabel(o.Platform)}</span>
         <code>{o.Digest.slice(7, 19)}</code>
       </Link>)}

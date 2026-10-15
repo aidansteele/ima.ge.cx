@@ -1,4 +1,6 @@
 import Head from "next/head";
+import {useRouter} from "next/router";
+import {colorScheme, themePath} from "../src/theme";
 
 export const siteUrl = "https://ima.ge.cx";
 export const siteTitle = "ima.ge.cx · See inside any container image";
@@ -11,8 +13,12 @@ export function SocialMetadata({title = siteTitle, description = siteDescription
   imageReference?: string;
   digest?: string;
 }) {
+  const theme = colorScheme(useRouter().query.theme);
   const url = `${siteUrl}${path}`;
-  const image = imageReference ? `${siteUrl}/api/og?${new URLSearchParams({image: imageReference, digest, v: "1"})}` : `${siteUrl}/og-image.jpg`;
+  const shareUrl = `${siteUrl}${themePath(path, theme)}`;
+  const params = new URLSearchParams({image: imageReference ?? "", digest, v: "1"});
+  if (theme) params.set("theme", theme);
+  const image = imageReference ? `${siteUrl}/api/og?${params}` : `${siteUrl}/og-image${theme === "light" ? "-light" : ""}.jpg`;
   const imageAlt = imageReference ? `${imageReference} — filesystem preview on ima.ge.cx` :
     "ima.ge.cx — See inside any container image. Files, layers & config. No Docker required.";
 
@@ -24,7 +30,7 @@ export function SocialMetadata({title = siteTitle, description = siteDescription
     <meta property="og:site_name" content="ima.ge.cx" key="og:site_name"/>
     <meta property="og:title" content={title} key="og:title"/>
     <meta property="og:description" content={description} key="og:description"/>
-    <meta property="og:url" content={url} key="og:url"/>
+    <meta property="og:url" content={shareUrl} key="og:url"/>
     <meta property="og:image" content={image} key="og:image"/>
     <meta property="og:image:type" content={imageReference ? "image/png" : "image/jpeg"} key="og:image:type"/>
     <meta property="og:image:width" content="1200" key="og:image:width"/>

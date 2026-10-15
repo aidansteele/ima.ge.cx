@@ -12,6 +12,7 @@ import {
 import {languages} from "@codemirror/language-data";
 import {highlightSelectionMatches, search, searchKeymap} from "@codemirror/search";
 import {tags as t} from "@lezer/highlight";
+import {useTheme} from "../src/theme";
 
 const interpreters: Record<string, string> = {
   sh: "Shell", bash: "Shell", dash: "Shell", ash: "Shell", zsh: "Shell", ksh: "Shell",
@@ -54,23 +55,23 @@ const indentFolding = foldService.of((state, lineStart) => {
 });
 
 const highlightStyle = HighlightStyle.define([
-  {tag: [t.keyword, t.modifier, t.controlKeyword, t.operatorKeyword], color: "#c4a7ff"},
-  {tag: [t.string, t.special(t.string), t.character], color: "#9ce3b5"},
-  {tag: [t.number, t.bool, t.null, t.atom], color: "#ffb86b"},
-  {tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: "#5f6880", fontStyle: "italic"},
-  {tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: "#82c8ff"},
-  {tag: [t.definition(t.variableName), t.definition(t.function(t.variableName))], color: "#82c8ff"},
-  {tag: [t.typeName, t.className, t.namespace], color: "#f7d07a"},
-  {tag: [t.propertyName, t.attributeName], color: "#b8c1ff"},
-  {tag: [t.tagName], color: "#ff8fa8"},
-  {tag: [t.regexp, t.escape], color: "#5fd4f4"},
-  {tag: [t.operator, t.punctuation, t.separator, t.bracket], color: "#97a0b5"},
-  {tag: [t.meta, t.processingInstruction, t.annotation], color: "#97a0b5"},
-  {tag: t.heading, color: "#e6e8ee", fontWeight: "700"},
+  {tag: [t.keyword, t.modifier, t.controlKeyword, t.operatorKeyword], color: "var(--code-keyword)"},
+  {tag: [t.string, t.special(t.string), t.character], color: "var(--code-string)"},
+  {tag: [t.number, t.bool, t.null, t.atom], color: "var(--code-number)"},
+  {tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: "var(--code-comment)", fontStyle: "italic"},
+  {tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: "var(--code-function)"},
+  {tag: [t.definition(t.variableName), t.definition(t.function(t.variableName))], color: "var(--code-function)"},
+  {tag: [t.typeName, t.className, t.namespace], color: "var(--code-type)"},
+  {tag: [t.propertyName, t.attributeName], color: "var(--code-property)"},
+  {tag: [t.tagName], color: "var(--code-tag)"},
+  {tag: [t.regexp, t.escape], color: "var(--code-regexp)"},
+  {tag: [t.operator, t.punctuation, t.separator, t.bracket], color: "var(--code-punctuation)"},
+  {tag: [t.meta, t.processingInstruction, t.annotation], color: "var(--code-punctuation)"},
+  {tag: t.heading, color: "var(--text)", fontWeight: "700"},
   {tag: t.strong, fontWeight: "700"},
   {tag: t.emphasis, fontStyle: "italic"},
-  {tag: [t.link, t.url], color: "#8f9cff", textDecoration: "underline"},
-  {tag: t.invalid, color: "#ff8fa8"},
+  {tag: [t.link, t.url], color: "var(--code-link)", textDecoration: "underline"},
+  {tag: t.invalid, color: "var(--code-tag)"},
 ]);
 
 const theme = EditorView.theme({
@@ -87,14 +88,14 @@ const theme = EditorView.theme({
   ".cm-content": {padding: "12px 0", caretColor: "transparent"},
   ".cm-gutters": {backgroundColor: "var(--surface)", color: "var(--faint)", border: "none", paddingLeft: "8px"},
   ".cm-lineNumbers .cm-gutterElement": {padding: "0 6px 0 8px"},
-  ".cm-activeLine": {backgroundColor: "rgba(255, 255, 255, 0.035)"},
+  ".cm-activeLine": {backgroundColor: "var(--code-active)"},
   ".cm-activeLineGutter": {backgroundColor: "transparent", color: "var(--muted)"},
   ".cm-foldGutter .cm-gutterElement": {width: "18px", display: "flex", alignItems: "center", justifyContent: "center"},
   ".cm-foldPlaceholder": {
     backgroundColor: "var(--accent-soft)", border: "none", color: "var(--accent)",
     borderRadius: "4px", padding: "0 6px", margin: "0 4px",
   },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {backgroundColor: "rgba(124, 140, 255, 0.28) !important"},
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": {backgroundColor: "var(--code-selection) !important"},
   ".cm-selectionMatch": {backgroundColor: "rgba(124, 140, 255, 0.16)"},
   ".cm-searchMatch": {backgroundColor: "rgba(245, 165, 36, 0.25)", outline: "1px solid rgba(245, 165, 36, 0.5)"},
   ".cm-searchMatch-selected": {backgroundColor: "rgba(245, 165, 36, 0.5)"},
@@ -114,7 +115,7 @@ const theme = EditorView.theme({
   },
   ".cm-button:hover": {borderColor: "var(--accent)"},
   ".cm-search [name=close]": {color: "var(--muted)", fontSize: "18px", top: "6px", right: "10px", cursor: "pointer"},
-}, {dark: true});
+});
 
 function foldMarker(open: boolean) {
   const marker = document.createElement("span");
@@ -130,6 +131,8 @@ const searchShortcut = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.tes
 export function CodeView({path, text}: { path: string, text: string }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
+  const {scheme} = useTheme();
+  const [appearance] = useState(() => new Compartment());
   const [languageName, setLanguageName] = useState<string>();
 
   useEffect(() => {
@@ -151,6 +154,7 @@ export function CodeView({path, text}: { path: string, text: string }) {
           keymap.of([...searchKeymap, ...foldKeymap]),
           syntaxHighlighting(highlightStyle),
           theme,
+          appearance.of([]),
           language.of(indentFolding),
         ],
       }),
@@ -173,7 +177,12 @@ export function CodeView({path, text}: { path: string, text: string }) {
       cancelled = true;
       editor.destroy();
     };
-  }, [path, text]);
+  }, [path, text, appearance]);
+
+  useEffect(() => {
+    // Reconfigure instead of rebuilding, preserving folds, selection and scroll.
+    view.current?.dispatch({effects: appearance.reconfigure(EditorView.darkTheme.of(scheme === "dark"))});
+  }, [scheme, appearance, path, text]);
 
   const run = (command: typeof foldAll) => () => {
     if (view.current) command(view.current);

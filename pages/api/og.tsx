@@ -17,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader("Allow", "GET, HEAD");
     return res.status(405).end();
   }
-  const {image, digest = ""} = req.query;
+  const {image, digest = "", theme = "dark"} = req.query;
   // Bound rendering work and only accept reference characters, not arbitrary
   // text, URLs or user-provided statistics. A registry port is allowed.
   if (typeof image !== "string" || image.length > 512 || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(image) ||
@@ -25,11 +25,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       typeof digest !== "string" || (digest !== "" && !/^sha256:[a-f0-9]{64}$/.test(digest))) {
     return res.status(400).send("Invalid image reference or digest");
   }
+  if (theme !== "light" && theme !== "dark") {
+    return res.status(400).send("Invalid theme");
+  }
 
   const info = await readImageInfo(image, digest);
   const filesystem = info ? await readFilesystemSummary(image, digest) : undefined;
   const [regular, bold] = await fonts;
-  const png = new ImageResponse(<ImageSocialCard image={image} digest={digest} info={info} filesystem={filesystem}/>, {
+  const png = new ImageResponse(<ImageSocialCard image={image} digest={digest} info={info} filesystem={filesystem} theme={theme}/>, {
     width: 1200, height: 630,
     fonts: [
       {name: "Inter", data: regular, weight: 400, style: "normal"},

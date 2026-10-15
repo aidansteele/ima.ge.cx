@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #0b0d12;
   --surface: #10131a;
   --surface-2: #151924;
@@ -10,11 +11,64 @@
   --accent: #7c8cff;
   --accent-soft: rgba(124, 140, 255, 0.14);
   --green: #3ecf8e;
+  --error: #f76b8a;
+  --topbar: rgba(11, 13, 18, 0.85);
+  --hero-gradient: linear-gradient(90deg, #8f9cff, #b388ff);
+  --chip-ink: white;
+  --chip-weight: 75%;
+  --code-keyword: #c4a7ff;
+  --code-string: #9ce3b5;
+  --code-number: #ffb86b;
+  --code-comment: #5f6880;
+  --code-function: #82c8ff;
+  --code-type: #f7d07a;
+  --code-property: #b8c1ff;
+  --code-tag: #ff8fa8;
+  --code-regexp: #5fd4f4;
+  --code-punctuation: #97a0b5;
+  --code-link: #8f9cff;
+  --code-active: rgba(255, 255, 255, 0.035);
+  --code-selection: rgba(124, 140, 255, 0.28);
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
-html, body {
+/* Set before first paint by the theme script; widgets use the same scheme. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f8fc;
+  --surface: #ffffff;
+  --surface-2: #edf0f7;
+  --border: #cdd3e2;
+  --border-soft: #dfe3ed;
+  --text: #202536;
+  --muted: #596278;
+  --faint: #687287;
+  --accent: #4b55c5;
+  --accent-soft: rgba(75, 85, 197, 0.09);
+  --green: #18794e;
+  --error: #bd3051;
+  --topbar: rgba(247, 248, 252, 0.85);
+  --hero-gradient: linear-gradient(90deg, #4b55c5, #7c3ec0);
+  --chip-ink: #202536;
+  --chip-weight: 40%;
+  --code-keyword: #7436b0;
+  --code-string: #237346;
+  --code-number: #a35115;
+  --code-comment: #687287;
+  --code-function: #17639e;
+  --code-type: #806012;
+  --code-property: #4b55a8;
+  --code-tag: #b32e52;
+  --code-regexp: #146c80;
+  --code-punctuation: #596278;
+  --code-link: #4b55c5;
+  --code-active: rgba(75, 85, 197, 0.04);
+  --code-selection: rgba(75, 85, 197, 0.18);
+}
+
+/* Override Mantine's body defaults even before React loads the saved theme. */
+html, html body {
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -57,7 +111,7 @@ code { font-family: var(--mono); }
   height: 56px;
   padding: 0 20px;
   border-bottom: 1px solid var(--border-soft);
-  background: rgba(11, 13, 18, 0.85);
+  background: var(--topbar);
   backdrop-filter: blur(12px);
   flex: none;
 }
@@ -89,13 +143,19 @@ code { font-family: var(--mono); }
   min-width: 0;
 }
 
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
 .icon-link {
   color: var(--muted);
   display: flex;
   padding: 6px;
   border-radius: 8px;
+  border: none;
+  background: none;
+  cursor: pointer;
 }
 .icon-link:hover { color: var(--text); background: var(--surface-2); }
+.icon-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .image-ref {
   display: flex;
@@ -251,14 +311,14 @@ code { font-family: var(--mono); }
   color: var(--faint);
   font-size: 12px;
 }
-.tree-status.error { color: #f76b8a; }
+.tree-status.error { color: var(--error); }
 
 .layer-chip {
   font-family: var(--mono);
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 5px;
-  color: color-mix(in srgb, var(--chip) 75%, white);
+  color: color-mix(in srgb, var(--chip) var(--chip-weight), var(--chip-ink));
   background: color-mix(in srgb, var(--chip) 16%, transparent);
   flex: none;
   white-space: nowrap;
@@ -318,6 +378,7 @@ code { font-family: var(--mono); }
   font-size: 12px;
   color: var(--muted);
 }
+.code-toolbar button { color: var(--muted); }
 .code-language { font-weight: 600; color: var(--text); }
 .code-hint { flex: 1; color: var(--faint); margin-left: 8px; }
 .code-host { flex: 1; min-height: 0; }
@@ -413,7 +474,7 @@ li:last-child > .step::before { bottom: 50%; }
 .step.selected .step-dot, .step:not(.meta) .step-dot { background: var(--chip); }
 .step.meta .step-dot { width: 8px; height: 8px; margin-left: 5px; }
 
-.step-digest { font-family: var(--mono); font-size: 12px; color: color-mix(in srgb, var(--chip) 75%, white); }
+.step-digest { font-family: var(--mono); font-size: 12px; color: color-mix(in srgb, var(--chip) var(--chip-weight), var(--chip-ink)); }
 .step-command {
   font-family: var(--mono);
   font-size: 12px;
@@ -440,8 +501,8 @@ li:last-child > .step::before { bottom: 50%; }
   background: var(--surface-2);
   border: 1px solid var(--border);
 }
-.badge-run { color: #b8c1ff; border-color: rgba(124, 140, 255, 0.35); }
-.badge-copy, .badge-add { color: #8be8bd; border-color: rgba(62, 207, 142, 0.35); }
+.badge-run { color: var(--code-property); border-color: rgba(124, 140, 255, 0.35); }
+.badge-copy, .badge-add { color: var(--green); border-color: rgba(62, 207, 142, 0.35); }
 
 .step-detail { padding: 24px 32px; }
 .step-detail h2 { display: flex; align-items: center; gap: 8px; font-size: 18px; margin: 0 0 16px; }
@@ -495,7 +556,7 @@ li:last-child > .step::before { bottom: 50%; }
 }
 .env-row:last-child { border-bottom: none; }
 .env-row:hover { background: var(--surface); }
-.env-key { color: #b8c1ff; }
+.env-key { color: var(--code-property); }
 .env-val { word-break: break-all; }
 
 /* Indexing */
@@ -555,7 +616,7 @@ li:last-child > .step::before { bottom: 50%; }
   margin: 0;
 }
 .hero .accent {
-  background: linear-gradient(90deg, #8f9cff, #b388ff);
+  background: var(--hero-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -568,6 +629,7 @@ li:last-child > .step::before { bottom: 50%; }
 .search .mantine-Autocomplete-input {
   border-color: var(--border);
   background: var(--surface);
+  color: var(--text);
   font-family: var(--mono);
   font-size: 18px;
   padding-right: 140px;
@@ -598,7 +660,7 @@ li:last-child > .step::before { bottom: 50%; }
   place-items: center;
   font-weight: 700;
   flex: none;
-  color: color-mix(in srgb, var(--chip) 80%, white);
+  color: color-mix(in srgb, var(--chip) var(--chip-weight), var(--chip-ink));
   background: color-mix(in srgb, var(--chip) 18%, transparent);
 }
 .example-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -641,7 +703,7 @@ li:last-child > .step::before { bottom: 50%; }
 /* Tablets: keep the image controls and summary accessible without squeezing them. */
 @media (max-width: 1100px) {
   .topbar { height: auto; min-height: 56px; flex-wrap: wrap; gap: 8px 16px; padding: 8px 16px; }
-  .topbar > .icon-link { margin-left: auto; }
+  .topbar-actions { margin-left: auto; }
   .topbar-center { order: 1; flex-basis: 100%; }
   .topbar-center:empty { display: none; }
   .image-ref { width: 100%; }

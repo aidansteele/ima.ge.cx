@@ -92,6 +92,15 @@ test("OG endpoint produces a 1200×630 PNG and only caches complete filesystem c
   assert.equal(png.readUInt32BE(16), 1200);
   assert.equal(png.readUInt32BE(20), 630);
 
+  const dark = await request({image: "nginx:1.27", digest, theme: "dark"});
+  assert.deepEqual(dark.body, indexed.body, "existing URLs retain the dark card");
+  const light = await request({image: "nginx:1.27", digest, theme: "light"});
+  assert.equal(light.status, 200);
+  assert.equal(light.headers["Cache-Control"], indexed.headers["Cache-Control"]);
+  assert.equal((light.body as Buffer).readUInt32BE(16), 1200);
+  assert.equal((light.body as Buffer).readUInt32BE(20), 630);
+  assert.notDeepEqual(light.body, dark.body, "the theme query must change the rendered PNG");
+
   api({}, 404);
   const unavailable = await request({image: "nginx:1.27", digest});
   assert.equal(unavailable.status, 200);
@@ -100,12 +109,17 @@ test("OG endpoint produces a 1200×630 PNG and only caches complete filesystem c
   const tagOnly = await request({image: "nginx"});
   assert.equal(tagOnly.status, 200);
   assert.equal(tagOnly.headers["Cache-Control"], "no-store");
+  const lightFallback = await request({image: "nginx", theme: "light"});
+  assert.equal(lightFallback.status, 200);
+  assert.equal(lightFallback.headers["Cache-Control"], "no-store");
+  assert.notDeepEqual(lightFallback.body, tagOnly.body);
 });
 
 test("OG endpoint rejects oversized or malformed requests and unsupported methods", async () => {
   global.fetch = async () => { throw new Error("invalid requests should never fetch data"); };
   for (const query of [{}, {image: ["one", "two"]}, {image: "x".repeat(513)}, {image: "<script>"},
-    {image: "https://example.com/image"}, {image: "nginx/"}, {image: "nginx", digest: "sha256:short"}]) {
+    {image: "https://example.com/image"}, {image: "nginx/"}, {image: "nginx", digest: "sha256:short"},
+    {image: "nginx", theme: "auto"}, {image: "nginx", theme: ["light", "dark"]}]) {
     assert.equal((await request(query)).status, 400);
   }
   const post = await request({image: "nginx"}, "POST");

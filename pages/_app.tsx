@@ -3,25 +3,31 @@ import type {AppProps} from 'next/app';
 import Head from 'next/head';
 import {MantineProvider} from '@mantine/core';
 import {setupRUM} from "../src/cwRum";
+import {ThemeProvider, useTheme} from "../src/theme";
 
 setupRUM();
 
 export default function App(props: AppProps) {
+  return <ThemeProvider><ThemedApp {...props}/></ThemeProvider>;
+}
+
+function ThemedApp(props: AppProps) {
   const {Component, pageProps} = props;
+  const {scheme} = useTheme();
 
   return (
     <>
       <Head>
         <title>ima.ge.cx</title>
         <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width"/>
-        <meta name="theme-color" content="#0b0d12"/>
+        <meta name="theme-color" content={scheme === "light" ? "#f7f8fc" : "#0b0d12"}/>
       </Head>
 
       <MantineProvider
         withGlobalStyles
         withNormalizeCSS
         theme={{
-          colorScheme: 'dark',
+          colorScheme: scheme,
           primaryColor: 'indigo',
           primaryShade: {light: 6, dark: 5},
           defaultRadius: 'md',

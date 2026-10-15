@@ -1,6 +1,7 @@
 import {ReactNode} from "react";
 import Link from "next/link";
-import {IconBrandGithub} from "@tabler/icons";
+import {IconBrandGithub, IconMoon, IconSun} from "@tabler/icons";
+import {useTheme} from "../src/theme";
 
 function Logo() {
   return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -10,15 +11,22 @@ function Logo() {
 }
 
 export function TopBar({children, beta}: { children?: ReactNode, beta?: boolean }) {
+  const {scheme, toggle, themedPath} = useTheme();
+  const themeLabel = `Switch to ${scheme === "dark" ? "light" : "dark"} mode`;
   return <header className="topbar">
-    <Link href="/" className="wordmark">
+    <Link href={themedPath("/")} className="wordmark">
       <Logo/>
       <span>ima.ge.cx</span>
       {beta && <span className="beta">beta</span>}
     </Link>
     <div className="topbar-center">{children}</div>
-    <a className="icon-link" href="https://github.com/aidansteele/ima.ge.cx" aria-label="GitHub repository">
-      <IconBrandGithub size={20}/>
-    </a>
+    <div className="topbar-actions">
+      <button type="button" className="icon-link" onClick={toggle} aria-label={themeLabel} title={themeLabel}>
+        {scheme === "dark" ? <IconSun size={20}/> : <IconMoon size={20}/>}
+      </button>
+      <a className="icon-link" href="https://github.com/aidansteele/ima.ge.cx" aria-label="GitHub repository">
+        <IconBrandGithub size={20}/>
+      </a>
+    </div>
   </header>;
 }

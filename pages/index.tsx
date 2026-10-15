@@ -1,4 +1,4 @@
-import type {NextPage} from 'next'
+import type {GetServerSideProps, NextPage} from 'next'
 import {CSSProperties, FormEvent, useState} from "react";
 import Link from "next/link";
 import {useRouter} from "next/router";
@@ -9,6 +9,7 @@ import {SocialMetadata} from "../components/socialMetadata";
 import {colorFor} from "../components/layerChip";
 import {useImageOptions, useImageTags} from "../src/imageHooks";
 import {rankTagSuggestions, registryOf, splitTag} from "../src/tags";
+import {useTheme} from "../src/theme";
 
 const examples = [
   {image: "ubuntu", description: "Ubuntu base image"},
@@ -18,6 +19,7 @@ const examples = [
 ];
 
 function ExampleCard({image, description}: { image: string, description: string }) {
+  const {themedPath} = useTheme();
   const {data} = useImageOptions(image);
   const {repo, tag} = splitTag(image);
   const name = repo.split("/").pop()!;
@@ -26,7 +28,7 @@ function ExampleCard({image, description}: { image: string, description: string 
   const registry = registryOf(repo);
   const namespace = repo.split("/").slice(registry === "docker.io" ? 0 : 1, -1).join("/");
 
-  return <Link href={`/${image}`} className="example">
+  return <Link href={themedPath(`/${image}`)} className="example">
     <span className="monogram" style={{"--chip": colorFor(name)} as CSSProperties}>{name[0].toUpperCase()}</span>
     <span className="example-body">
       <span className="example-name" title={image}>{name}</span>
@@ -42,6 +44,7 @@ function ExampleCard({image, description}: { image: string, description: string 
 
 function Search() {
   const router = useRouter();
+  const {themedPath} = useTheme();
   const [value, setValue] = useState("");
   const {repo, tag} = splitTag(value.trim());
   // Suggest tags once the user has typed "repo:".
@@ -52,7 +55,7 @@ function Search() {
 
   const go = (image: string) => {
     const ref = image.trim().replace(/^docker pull\s+/, "").replace(/^https?:\/\//, "");
-    if (ref) router.push(`/${ref}`);
+    if (ref) router.push(themedPath(`/${ref}`));
   };
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -121,5 +124,8 @@ const Home: NextPage = () => {
     </footer>
   </div>;
 }
+
+// Read the theme query on the server so social crawlers receive the right card.
+export const getServerSideProps: GetServerSideProps = async () => ({props: {}});
 
 export default Home
