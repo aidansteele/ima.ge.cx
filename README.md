@@ -34,8 +34,9 @@ first access; the page shows progress while indexing runs.
 
 File selections are shareable URL fragments:
 `/<image>@<digest>#/path/to/file`. Use **Copy link** to share the exact image
-digest and selected file. Click a line number to include it in the address bar,
-then use **Copy link** to share `/<image>@<digest>#/path/to/file:L42`.
+digest and selected file. Click a line number to include it in the address bar
+without moving the scroll position, then use **Copy link** to share
+`/<image>@<digest>#/path/to/file:L42`.
 Line numbers start at 1. Opening a line link scrolls to and highlights that line,
 including inside a collapsed block; links beyond the end reveal the final line.
 Invalid line numbers are ignored. Selecting files or lines replaces the current

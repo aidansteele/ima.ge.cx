@@ -134,6 +134,7 @@ export function CodeView({path, text, line, onSelectLine}: {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
   const selectLine = useRef(onSelectLine);
+  const clickedLine = useRef<number>();
   const {scheme} = useTheme();
   const [appearance] = useState(() => new Compartment());
   const [languageName, setLanguageName] = useState<string>();
@@ -150,7 +151,11 @@ export function CodeView({path, text, line, onSelectLine}: {
           EditorState.readOnly.of(true),
           lineNumbers({domEventHandlers: {
             click: (editor, block) => {
-              selectLine.current(editor.state.doc.lineAt(block.from).number);
+              const number = editor.state.doc.lineAt(block.from).number;
+              clickedLine.current = number;
+              // Highlight in place, even if this line is already in the URL.
+              editor.dispatch({selection: {anchor: block.from}});
+              selectLine.current(number);
               return true;
             },
           }}),
@@ -170,6 +175,7 @@ export function CodeView({path, text, line, onSelectLine}: {
       }),
     });
     view.current = editor;
+    clickedLine.current = undefined;
 
     let cancelled = false;
     const description = detectLanguage(path, text);
@@ -196,7 +202,10 @@ export function CodeView({path, text, line, onSelectLine}: {
 
   useEffect(() => {
     const editor = view.current;
-    if (!editor || line === undefined) return;
+    const fromClick = clickedLine.current === line;
+    clickedLine.current = undefined;
+    // Only incoming links should scroll; gutter clicks already highlight in place.
+    if (!editor || line === undefined || fromClick) return;
     // Stale links beyond EOF reveal the final line instead of throwing.
     const target = editor.state.doc.line(Math.min(line, editor.state.doc.lines));
     const effects: StateEffect<unknown>[] = [EditorView.scrollIntoView(target.from, {y: "center"})];
