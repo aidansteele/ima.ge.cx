@@ -8,8 +8,15 @@ export function splitTag(image: string): { repo: string, tag?: string } {
 const numericCollator = new Intl.Collator(undefined, {numeric: true});
 
 // Newest-looking versions first (so 1.22 comes before 1.9), with "latest" at the top.
-export function sortTags(tags: string[]) {
+// Search puts exact matches first, then prefixes, before the remaining tags.
+export function sortTags(tags: string[], search = "") {
+  const query = search.toLowerCase().trim();
+  const rank = (tag: string) => {
+    const value = tag.toLowerCase();
+    return !query ? 0 : value === query ? 0 : value.startsWith(query) ? 1 : 2;
+  };
   return [...tags].sort((a, b) =>
+    rank(a) - rank(b) ||
     Number(b === "latest") - Number(a === "latest") || numericCollator.compare(b, a));
 }
 

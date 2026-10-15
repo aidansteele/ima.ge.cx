@@ -1,4 +1,4 @@
-import {useEffect, useMemo} from "react";
+import {useEffect, useMemo, useState} from "react";
 import {useRouter} from "next/router";
 import {Select, Tooltip} from "@mantine/core";
 import {IconBox} from "@tabler/icons";
@@ -23,7 +23,8 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
   const hash = () => window.location.hash;
 
   const {data: tagData, error: tagError} = useImageTags(repo);
-  const tags = useMemo(() => sortTags(tagData?.Tags ?? []), [tagData]);
+  const [tagSearch, setTagSearch] = useState("");
+  const tags = useMemo(() => sortTags(tagData?.Tags ?? [], tagSearch), [tagData, tagSearch]);
 
   const {data: options, error: optionsError} = useImageOptions(image);
 
@@ -56,6 +57,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
         withinPortal
         placeholder={tagFailed ? "tags unavailable" : tagData ? "tag" : "loading tags…"}
         searchable
+        onSearchChange={setTagSearch}
         // Rendering thousands of options is slow; searching narrows the list.
         limit={200}
         nothingFound="No matching tags"
