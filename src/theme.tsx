@@ -38,6 +38,16 @@ export function ThemeProvider({children}: {children: ReactNode}) {
   const explicit = colorScheme(router.query.theme);
   const [scheme, setScheme] = useState<ColorScheme>(explicit ?? "dark");
 
+  const selectScheme = useCallback((next: ColorScheme) => {
+    try { localStorage.setItem("theme", next); } catch {}
+    document.documentElement.dataset.theme = next;
+    setScheme(next);
+    // Keep the file hash and workspace state, and make copied links use the
+    // selected social-card palette without requiring crawlers to run JavaScript.
+    const path = `${location.pathname}${location.search}${location.hash}`;
+    void router.replace(themePath(path, next), undefined, {shallow: true, scroll: false});
+  }, [router]);
+
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: light)");
     const update = () => {
@@ -47,25 +57,18 @@ export function ThemeProvider({children}: {children: ReactNode}) {
       document.documentElement.dataset.theme = next;
       setScheme(next);
     };
+    // An OS change is a new selection, not a reload of the previous preference.
+    const followSystem = () => selectScheme(media.matches ? "light" : "dark");
     update();
-    media.addEventListener("change", update);
+    media.addEventListener("change", followSystem);
     window.addEventListener("storage", update);
     return () => {
-      media.removeEventListener("change", update);
+      media.removeEventListener("change", followSystem);
       window.removeEventListener("storage", update);
     };
-  }, [explicit]);
+  }, [explicit, selectScheme]);
 
-  const toggle = () => {
-    const next = scheme === "dark" ? "light" : "dark";
-    try { localStorage.setItem("theme", next); } catch {}
-    document.documentElement.dataset.theme = next;
-    setScheme(next);
-    // Keep the file hash and workspace state, and make copied links use the
-    // selected social-card palette without requiring crawlers to run JavaScript.
-    const path = `${location.pathname}${location.search}${location.hash}`;
-    void router.replace(themePath(path, next), undefined, {shallow: true, scroll: false});
-  };
+  const toggle = () => selectScheme(scheme === "dark" ? "light" : "dark");
   const themedPath = useCallback((path: string) => themePath(path, explicit), [explicit]);
 
   return <ThemeContext.Provider value={{scheme, toggle, themedPath}}>{children}</ThemeContext.Provider>;
