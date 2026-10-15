@@ -53,6 +53,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
         aria-label="Tag"
         className="image-tag"
         styles={compactSelect}
+        withinPortal
         placeholder={tagFailed ? "tags unavailable" : tagData ? "tag" : "loading tags…"}
         searchable
         // Rendering thousands of options is slow; searching narrows the list.
@@ -71,6 +72,7 @@ export function ImageRef({image, digest}: { image: string, digest?: string }) {
         aria-label="Platform"
         className="image-platform"
         styles={compactSelect}
+        withinPortal
         placeholder={platformFailed ? "lookup failed" : options ? "platform" : "loading…"}
         data={platforms}
         value={digest ?? null}
