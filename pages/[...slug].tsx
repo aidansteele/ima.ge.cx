@@ -27,16 +27,16 @@ const tabs = [
 type Tab = typeof tabs[number]["value"];
 
 function Workspace({info, image, digest}: { info: ImageInfo, image: string, digest: string }) {
-  const [selectedPath, setSelectedPath, hidden, setHidden] = useHashPath();
+  const [selectedPath, setSelectedPath, hidden, setHidden, selectedLine] = useHashPath();
   // The file the page was opened with, which is scrolled into view once its directory loads.
   const [linkedPath] = useState(selectedPath);
   const [tab, setTab] = useState<Tab>("files");
   const [showTree, setShowTree] = useState(!selectedPath);
 
   // Shared links and browser history open the viewer on narrow screens.
-  useEffect(() => setShowTree(!selectedPath), [selectedPath]);
-  const selectFile = (path: string) => {
-    setSelectedPath(path);
+  useEffect(() => setShowTree(!selectedPath), [selectedPath, selectedLine]);
+  const selectFile = (path: string, line?: number) => {
+    setSelectedPath(path, line);
     setShowTree(false);
   };
 
@@ -69,7 +69,7 @@ function Workspace({info, image, digest}: { info: ImageInfo, image: string, dige
                     scrollToPath={linkedPath} onSelect={selectFile}/>
         </aside>
         <section className="pane viewer-pane">
-          <FileViewer image={image} digest={digest} hidden={hidden} path={selectedPath} onSelect={selectFile}/>
+          <FileViewer image={image} digest={digest} hidden={hidden} path={selectedPath} line={selectedLine} onSelect={selectFile}/>
         </section>
       </div>}
       {tab === "layers" && <Layers info={info}/>}

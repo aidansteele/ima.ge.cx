@@ -34,7 +34,13 @@ first access; the page shows progress while indexing runs.
 
 File selections are shareable URL fragments:
 `/<image>@<digest>#/path/to/file`. Use **Copy link** to share the exact image
-digest and selected file.
+digest and selected file. Click a line number to include it in the address bar,
+then use **Copy link** to share `/<image>@<digest>#/path/to/file:L42`.
+Line numbers start at 1. Opening a line link scrolls to and highlights that line,
+including inside a collapsed block; links beyond the end reveal the final line.
+Invalid line numbers are ignored. Selecting files or lines replaces the current
+history entry rather than adding one. Colons in file names are URL-encoded so
+they cannot be confused with the line suffix.
 
 Shared links include server-rendered Open Graph and Twitter metadata and a
 1200×630 sharing image. Indexed digest links get a dynamic filesystem card with

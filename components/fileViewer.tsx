@@ -46,7 +46,9 @@ function Empty({icon, title, children}: { icon: JSX.Element, title: string, chil
   </div>;
 }
 
-export function FileViewer({image, digest, path, onSelect, hidden}: { image: string, digest: string, path: string, onSelect: (path: string) => void, hidden: boolean }) {
+export function FileViewer({image, digest, path, line, onSelect, hidden}: {
+  image: string, digest: string, path: string, line?: number, onSelect: (path: string, line?: number) => void, hidden: boolean
+}) {
   // The tree has already listed the parent directory, so this reuses its cached response.
   const dir = useDirectory(image, digest, parentDir(path), path !== "", hidden);
   const entry = dir.dirents.find(e => e.path === path || e.path === `${path}/`);
@@ -94,7 +96,7 @@ export function FileViewer({image, digest, path, onSelect, hidden}: { image: str
   } else if (looksBinary(contents.data)) {
     body = <Empty icon={<IconFileUnknown size={36}/>} title="Binary file">Download it to inspect it locally.</Empty>;
   } else {
-    body = <CodeView path={path} text={contents.data}/>;
+    body = <CodeView path={path} text={contents.data} line={line} onSelectLine={line => onSelect(path, line)}/>;
   }
 
   return <div className="viewer">

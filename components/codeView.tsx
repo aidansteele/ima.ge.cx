@@ -1,13 +1,13 @@
 import {useEffect, useRef, useState} from "react";
 import {Button} from "@mantine/core";
 import {IconFold, IconFoldDown} from "@tabler/icons";
-import {Compartment, EditorState} from "@codemirror/state";
+import {Compartment, EditorState, StateEffect} from "@codemirror/state";
 import {
   drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers,
 } from "@codemirror/view";
 import {
-  codeFolding, foldAll, foldGutter, foldKeymap, foldService, HighlightStyle, LanguageDescription,
-  StreamLanguage, syntaxHighlighting, unfoldAll,
+  codeFolding, foldAll, foldedRanges, foldGutter, foldKeymap, foldService, HighlightStyle, LanguageDescription,
+  StreamLanguage, syntaxHighlighting, unfoldAll, unfoldEffect,
 } from "@codemirror/language";
 import {languages} from "@codemirror/language-data";
 import {highlightSelectionMatches, search, searchKeymap} from "@codemirror/search";
@@ -87,7 +87,7 @@ const theme = EditorView.theme({
   ".cm-scroller": {fontFamily: "var(--mono)", lineHeight: "1.6", borderRadius: "10px"},
   ".cm-content": {padding: "12px 0", caretColor: "transparent"},
   ".cm-gutters": {backgroundColor: "var(--surface)", color: "var(--faint)", border: "none", paddingLeft: "8px"},
-  ".cm-lineNumbers .cm-gutterElement": {padding: "0 6px 0 8px"},
+  ".cm-lineNumbers .cm-gutterElement": {padding: "0 6px 0 8px", cursor: "pointer"},
   ".cm-activeLine": {backgroundColor: "var(--code-active)"},
   ".cm-activeLineGutter": {backgroundColor: "transparent", color: "var(--muted)"},
   ".cm-foldGutter .cm-gutterElement": {width: "18px", display: "flex", alignItems: "center", justifyContent: "center"},
@@ -128,12 +128,17 @@ function foldMarker(open: boolean) {
 // so long files stay fast.
 const searchShortcut = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘F" : "Ctrl+F";
 
-export function CodeView({path, text}: { path: string, text: string }) {
+export function CodeView({path, text, line, onSelectLine}: {
+  path: string, text: string, line?: number, onSelectLine: (line: number) => void
+}) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
+  const selectLine = useRef(onSelectLine);
   const {scheme} = useTheme();
   const [appearance] = useState(() => new Compartment());
   const [languageName, setLanguageName] = useState<string>();
+
+  useEffect(() => { selectLine.current = onSelectLine; }, [onSelectLine]);
 
   useEffect(() => {
     const language = new Compartment();
@@ -143,7 +148,12 @@ export function CodeView({path, text}: { path: string, text: string }) {
         doc: text,
         extensions: [
           EditorState.readOnly.of(true),
-          lineNumbers(),
+          lineNumbers({domEventHandlers: {
+            click: (editor, block) => {
+              selectLine.current(editor.state.doc.lineAt(block.from).number);
+              return true;
+            },
+          }}),
           codeFolding({placeholderText: "⋯"}),
           foldGutter({markerDOM: foldMarker}),
           highlightActiveLine(),
@@ -183,6 +193,19 @@ export function CodeView({path, text}: { path: string, text: string }) {
     // Reconfigure instead of rebuilding, preserving folds, selection and scroll.
     view.current?.dispatch({effects: appearance.reconfigure(EditorView.darkTheme.of(scheme === "dark"))});
   }, [scheme, appearance, path, text]);
+
+  useEffect(() => {
+    const editor = view.current;
+    if (!editor || line === undefined) return;
+    // Stale links beyond EOF reveal the final line instead of throwing.
+    const target = editor.state.doc.line(Math.min(line, editor.state.doc.lines));
+    const effects: StateEffect<unknown>[] = [EditorView.scrollIntoView(target.from, {y: "center"})];
+    // Same-file links must also reveal lines inside an already collapsed block.
+    foldedRanges(editor.state).between(target.from, target.from, (from, to) => {
+      effects.push(unfoldEffect.of({from, to}));
+    });
+    editor.dispatch({selection: {anchor: target.from}, effects});
+  }, [line, path, text]);
 
   const run = (command: typeof foldAll) => () => {
     if (view.current) command(view.current);
