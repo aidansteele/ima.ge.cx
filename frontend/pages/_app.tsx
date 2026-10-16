@@ -21,6 +21,8 @@ function ThemedApp(props: AppProps) {
         <title>ima.ge.cx</title>
         <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width"/>
         <meta name="theme-color" content={scheme === "light" ? "#f7f8fc" : "#0b0d12"}/>
+        <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48"/>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any"/>
       </Head>
 
       <MantineProvider
