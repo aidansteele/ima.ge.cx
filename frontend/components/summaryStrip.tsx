@@ -1,5 +1,5 @@
 import {ActionIcon, CopyButton, Tooltip} from "@mantine/core";
-import {IconBox, IconCheck, IconCopy, IconCpu, IconFiles, IconFingerprint, IconStack2} from "@tabler/icons";
+import {IconBox, IconCheck, IconCopy, IconFiles, IconFingerprint, IconStack2} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
 import {entryFiles, entrySize, ImageInfo, useDirectory} from "../src/imageHooks";
 
@@ -23,8 +23,6 @@ function Stat({icon, value, label}: { icon: JSX.Element, value: string, label: s
 }
 
 export function SummaryStrip({info, image, digest}: { info: ImageInfo, image: string, digest: string }) {
-  const config = info.Config;
-  const platform = [config?.os, config?.architecture, config?.variant].filter(Boolean).join("/") || "unknown";
   // The file tree lists the root too, so this reuses its cached response.
   const root = useDirectory(image, digest, "/", true).dirents;
   const size = root.reduce((n, e) => n + entrySize(e), 0);
@@ -33,21 +31,20 @@ export function SummaryStrip({info, image, digest}: { info: ImageInfo, image: st
     ? info.TotalSize / 1e9 : undefined;
   const duration = info.Status === "SUCCEEDED" && typeof info.DurationSeconds === "number"
     && Number.isFinite(info.DurationSeconds) && info.DurationSeconds > 0 ? info.DurationSeconds : undefined;
-  const throughput = duration !== undefined && compressedGB !== undefined ? compressedGB / duration : undefined;
+  const throughput = duration !== undefined && compressedGB !== undefined ? compressedGB * 1e3 / duration : undefined;
 
   return <div className="summary">
     <Stat icon={<IconBox size={20}/>} value={compressedGB === undefined ? "unknown" : `${statistic.format(compressedGB)} GB`} label="compressed size"/>
     {size > 0 && <Stat icon={<IconFiles size={20}/>} value={formatBytes(size, 1)} label={`in ${files.toLocaleString()} files`}/>}
     <Stat icon={<IconStack2 size={20}/>} value={String(info.Manifest?.layers?.length ?? 0)} label="layers"/>
-    <Stat icon={<IconCpu size={20}/>} value={platform} label="platform"/>
-    <Tooltip label="Effective throughput: compressed image size divided by the whole indexing duration, including cache reuse. Not network download speed. GB = 1,000,000,000 bytes."
+    <Tooltip label="Effective throughput: compressed image size divided by the whole indexing duration, including cache reuse. Not network download speed. MB = 1,000,000 bytes; GB = 1,000 MB."
              disabled={throughput === undefined} multiline width={300} withinPortal
              events={{hover: true, focus: true, touch: true}}>
       <div className="stat" tabIndex={throughput === undefined ? undefined : 0}>
         <span className="status-dot"/>
         <div>
           <div className="stat-value">{duration === undefined ? "Indexed" : `Indexed in ${statistic.format(duration)} s`}</div>
-          {throughput !== undefined && <div className="stat-label">{statistic.format(throughput)} GB/s effective</div>}
+          {throughput !== undefined && <div className="stat-label">{statistic.format(throughput)} MB/s effective</div>}
           <div className="stat-label">{ago(info.Retrieved) ?? "ready"}</div>
         </div>
       </div>
