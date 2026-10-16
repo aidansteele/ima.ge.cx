@@ -3,14 +3,7 @@ import {IconBox, IconCheck, IconCopy, IconFiles, IconFingerprint, IconStack2} fr
 import {formatBytes} from "../src/formatBytes";
 import {entryFiles, entrySize, ImageInfo, useDirectory} from "../src/imageHooks";
 
-const relativeTime = new Intl.RelativeTimeFormat(undefined, {numeric: "auto"});
 const statistic = new Intl.NumberFormat("en", {maximumSignificantDigits: 3});
-
-function ago(iso?: string) {
-  if (!iso) return undefined;
-  const days = Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
-  return days === 0 ? "today" : relativeTime.format(days, "day");
-}
 
 function Stat({icon, value, label}: { icon: JSX.Element, value: string, label: string }) {
   return <div className="stat">
@@ -37,18 +30,13 @@ export function SummaryStrip({info, image, digest}: { info: ImageInfo, image: st
     <Stat icon={<IconBox size={20}/>} value={compressedGB === undefined ? "unknown" : `${statistic.format(compressedGB)} GB`} label="compressed size"/>
     {size > 0 && <Stat icon={<IconFiles size={20}/>} value={formatBytes(size, 1)} label={`in ${files.toLocaleString()} files`}/>}
     <Stat icon={<IconStack2 size={20}/>} value={String(info.Manifest?.layers?.length ?? 0)} label="layers"/>
-    <Tooltip label="Effective throughput: compressed image size divided by the whole indexing duration, including cache reuse. Not network download speed. MB = 1,000,000 bytes; GB = 1,000 MB."
-             disabled={throughput === undefined} multiline width={300} withinPortal
-             events={{hover: true, focus: true, touch: true}}>
-      <div className="stat" tabIndex={throughput === undefined ? undefined : 0}>
-        <span className="status-dot"/>
-        <div>
-          <div className="stat-value">{duration === undefined ? "Indexed" : `Indexed in ${statistic.format(duration)} s`}</div>
-          {throughput !== undefined && <div className="stat-label">{statistic.format(throughput)} MB/s effective</div>}
-          <div className="stat-label">{ago(info.Retrieved) ?? "ready"}</div>
-        </div>
+    <div className="stat">
+      <span className="status-dot"/>
+      <div>
+        <div className="stat-value">{duration === undefined ? "Indexed" : `Indexed in ${statistic.format(duration)} s`}</div>
+        {throughput !== undefined && <div className="stat-label">{statistic.format(throughput)} MB/s</div>}
       </div>
-    </Tooltip>
+    </div>
     <div className="summary-digest">
       <IconFingerprint size={16}/>
       <code>{digest.slice(0, 19)}…</code>
