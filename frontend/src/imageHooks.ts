@@ -129,6 +129,7 @@ export interface ImageInfo {
   Retrieved?: string;
   Progresses?: LayerProgress[];
   TotalSize?: number;
+  DurationSeconds?: number;
   CompletedSize?: number;
   Config?: ImageConfig;
   Manifest?: ImageManifest;

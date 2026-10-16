@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"browseimage/bitypes"
+	"browseimage/httpclient"
 	"browseimage/layerreader"
 	"browseimage/targzi"
 	"bytes"
@@ -128,7 +129,7 @@ func TestHandleCombinedIndexes(t *testing.T) {
 				w.Header().Set("x-amz-version-id", "published")
 			}))
 			defer server.Close()
-			api := s3.NewFromConfig(aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}, func(o *s3.Options) { o.UsePathStyle = true })
+			api := s3.NewFromConfig(aws.Config{Region: "us-east-1", HTTPClient: httpclient.DefaultClient, Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}, func(o *s3.Options) { o.UsePathStyle = true })
 			c := &concatenator{bucket: "bucket", downloader: manager.NewDownloader(api), uploader: manager.NewUploader(api)}
 			out, err := c.handle(context.Background(), input)
 			require.NoError(t, err)

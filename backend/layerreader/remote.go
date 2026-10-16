@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -33,6 +35,11 @@ type RemoteOutput struct {
 }
 
 func (r Remote) ReadLayer(ctx context.Context, key *bitypes.ImageInfoKey, layer v1.Layer) ([]MyTarHeader, error) {
+	// Synchronous invocation can legitimately wait the full 15-minute Lambda
+	// runtime before receiving headers, so use a separate overall deadline.
+	ctx, cancel := context.WithTimeout(ctx, 16*time.Minute)
+	defer cancel()
+
 	digest, _ := layer.Digest()
 	input, _ := json.Marshal(RemoteInput{Key: key, Layer: digest})
 

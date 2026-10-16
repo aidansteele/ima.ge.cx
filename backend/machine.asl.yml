@@ -39,6 +39,7 @@ States:
         Repo: "{% $states.input.Repo %}"
         Digest: "{% $states.input.Digest %}"
       Layer: "{% $states.context.Map.Item.Value %}"
+      Size: "{% $lookup($states.input.ImageLayers.LayerSizes, $states.context.Map.Item.Value) %}"
       ExecutionName: "{% $states.context.Execution.Name %}"
     ItemProcessor:
       StartAt: Index layer tar.gz
@@ -47,7 +48,7 @@ States:
           Type: Task
           Resource: arn:aws:states:::lambda:invoke
           Arguments:
-            FunctionName: ${LayerReader}
+            FunctionName: "{% $states.input.Size >= 67108864 ? '${LargeLayerReader}' : '${LayerReader}' %}"
             Payload: "{% $states.input %}"
           Output: "{% $states.result.Payload %}"
           Retry:

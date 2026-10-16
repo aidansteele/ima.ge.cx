@@ -48,33 +48,42 @@ func TestIndexRangeRoundTrip(t *testing.T) {
 	_, err := gz.Write(make([]byte, 512<<10)) // Padding after the tar EOF must be drained.
 	require.NoError(t, err)
 	require.NoError(t, gz.Close())
-	var count int64
-	// Hide seekability to exercise the HTTP/stdin path.
-	idx, err := BuildIndex(context.Background(), t.TempDir(), struct{ io.Reader }{bytes.NewReader(compressed.Bytes())}, &count)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(files)), count)
-	spans, err := idx.Spans()
-	require.NoError(t, err)
-	require.Greater(t, len(spans), 1)
-	for _, entry := range idx.Entries {
-		var expected []byte
-		for _, f := range files {
-			if f.name == entry.Hdr.Name {
-				expected = f.body
+	for _, workers := range []int{0, 4} {
+		t.Run(fmt.Sprint(workers), func(t *testing.T) {
+			if workers > 0 {
+				if _, err := exec.LookPath("rapidgzip"); err != nil {
+					t.Skip("requires rapidgzip on PATH (run with the built Linux layer)")
+				}
 			}
-		}
-		require.Equal(t, int64(len(expected)), entry.Hdr.Size)
-		if entry.Hdr.Size == 0 {
-			continue
-		}
-		start, end, err := CompressedRange(spans, entry.Spans)
-		require.NoError(t, err)
-		if end == 0 || end >= compressed.Len() {
-			end = compressed.Len() - 1
-		}
-		got, err := idx.Extract(context.Background(), bytes.NewReader(compressed.Bytes()[start-1:end+1]), start, entry.Offset, int(entry.Hdr.Size))
-		require.NoError(t, err)
-		require.True(t, bytes.Equal(expected, got), "range extraction differs for %s", entry.Hdr.Name)
+			var count int64
+			// Hide seekability to exercise the HTTP/stdin path.
+			idx, err := BuildIndexWithWorkers(context.Background(), t.TempDir(), struct{ io.Reader }{bytes.NewReader(compressed.Bytes())}, &count, workers)
+			require.NoError(t, err)
+			require.Equal(t, int64(len(files)), count)
+			spans, err := idx.Spans()
+			require.NoError(t, err)
+			require.Greater(t, len(spans), 1)
+			for _, entry := range idx.Entries {
+				var expected []byte
+				for _, f := range files {
+					if f.name == entry.Hdr.Name {
+						expected = f.body
+					}
+				}
+				require.Equal(t, int64(len(expected)), entry.Hdr.Size)
+				if entry.Hdr.Size == 0 {
+					continue
+				}
+				start, end, err := CompressedRange(spans, entry.Spans)
+				require.NoError(t, err)
+				if end == 0 || end >= compressed.Len() {
+					end = compressed.Len() - 1
+				}
+				got, err := idx.Extract(context.Background(), bytes.NewReader(compressed.Bytes()[start-1:end+1]), start, entry.Offset, int(entry.Hdr.Size))
+				require.NoError(t, err)
+				require.True(t, bytes.Equal(expected, got), "range extraction differs for %s", entry.Hdr.Name)
+			}
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"browseimage/bitypes"
+	"browseimage/httpclient"
 	"browseimage/layerreader"
 	"browseimage/logging"
 	"browseimage/targzi"
@@ -16,6 +17,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -38,12 +40,19 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(httpclient.DefaultClient))
 	if err != nil {
 		panic(fmt.Sprintf("err %+v", err))
 	}
 
 	s3api := s3.NewFromConfig(cfg)
+	workers := 0
+	if value := os.Getenv("INDEX_WORKERS"); value != "" {
+		workers, err = strconv.Atoi(value)
+		if err != nil || workers < 0 {
+			panic("INDEX_WORKERS must be a nonnegative integer")
+		}
+	}
 	d := downloader{
 		s3:       s3api,
 		uploader: manager.NewUploader(s3api),
@@ -53,8 +62,9 @@ func main() {
 				o.MaxAttempts = 10
 			})
 		}),
-		table: os.Getenv("TABLE"),
-		cache: os.Getenv("LAYER_CACHE") != "false",
+		table:   os.Getenv("TABLE"),
+		cache:   os.Getenv("LAYER_CACHE") != "false",
+		workers: workers,
 	}
 
 	lambda.Start(logging.Middleware(d.handle))
@@ -67,6 +77,7 @@ type downloader struct {
 	dynamodb *dynamodb.Client
 	table    string
 	cache    bool
+	workers  int
 }
 
 func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput) (*layerreader.RemoteOutput, error) {
@@ -79,7 +90,7 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithContext(ctx))
+	img, err := remote.Image(ref, remote.WithContext(ctx), remote.WithTransport(httpclient.DefaultClient.Transport))
 	if err != nil {
 		return nil, fmt.Errorf("getting image for ref: %w", err)
 	}
@@ -158,7 +169,11 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 	defer os.RemoveAll(dir)
 
 	indexStart := time.Now()
-	index, err := targzi.BuildIndex(ctx, dir, counter, &fileCount)
+	workers := d.workers
+	if totalSize < 64<<20 {
+		workers = 0
+	}
+	index, err := targzi.BuildIndexWithWorkers(ctx, dir, counter, &fileCount, workers)
 	if err != nil {
 		return nil, fmt.Errorf("building index: %w", err)
 	}
@@ -269,6 +284,10 @@ func (d *downloader) cachedIndex(ctx context.Context, key string) (*layerCache, 
 // until ctx is cancelled, then writes them one final time.
 func (d *downloader) countProgress(ctx context.Context, byteCounter, fileCounter *int64, key bitypes.LayerProgressKey) {
 	update := func(ctx context.Context) {
+		// Bound retries too, including the final write after cancellation.
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
 		byteCount := atomic.LoadInt64(byteCounter)
 		fileCount := atomic.LoadInt64(fileCounter)
 

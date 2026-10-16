@@ -1,6 +1,7 @@
 package targzi
 
 import (
+	"browseimage/httpclient"
 	"browseimage/s3select"
 	"context"
 	"fmt"
@@ -77,7 +78,7 @@ func (te *TarExplorer) FileContents(ctx context.Context, key, file string) ([]by
 	}
 	req.Header.Set("Range", RangeHeader(start, end))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpclient.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching layer content: %w", err)
 	}

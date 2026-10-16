@@ -120,6 +120,10 @@ func Extract(ctx context.Context, gz io.Reader, gzIndexPath string, skipped, unc
 }
 
 func BuildIndex(ctx context.Context, root string, gz io.Reader, fileCounter *int64) (*Index, error) {
+	return BuildIndexWithWorkers(ctx, root, gz, fileCounter, 0)
+}
+
+func BuildIndexWithWorkers(ctx context.Context, root string, gz io.Reader, fileCounter *int64, workers int) (*Index, error) {
 	started := time.Now()
 	dir, err := os.MkdirTemp(root, "targzi*")
 	if err != nil {
@@ -137,6 +141,9 @@ func BuildIndex(ctx context.Context, root string, gz io.Reader, fileCounter *int
 
 	// Tar offsets are byte-based; counting newlines wastes a scan of every byte.
 	cmd := exec.CommandContext(ctx, "gztool", "-z", "-I", gzIndexPath, "-b", "0")
+	if workers > 0 {
+		cmd = exec.CommandContext(ctx, "rapidgzip", "-d", "-c", "-P", strconv.Itoa(workers), "--export-index", gzIndexPath, "--index-format", "gztool")
+	}
 	cmd.WaitDelay = time.Second
 	cmd.Stdin = gz
 	cmd.Stderr = os.Stderr
@@ -226,7 +233,7 @@ func BuildIndex(ctx context.Context, root string, gz io.Reader, fileCounter *int
 	if err != nil {
 		return nil, fmt.Errorf("gztool exit: %w", err)
 	}
-	slog.InfoContext(ctx, "finished decoder", "duration", time.Since(started), "sort_duration", sortDuration)
+	slog.InfoContext(ctx, "finished decoder", "duration", time.Since(started), "sort_duration", sortDuration, "workers", workers)
 
 	metadataStart := time.Now()
 	spans, err := Spans(gzIndexPath)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"browseimage/bitypes"
+	"browseimage/httpclient"
 	"browseimage/logging"
 	"context"
 	"fmt"
@@ -79,7 +80,7 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(httpclient.DefaultClient))
 	if err != nil {
 		panic(err)
 	}

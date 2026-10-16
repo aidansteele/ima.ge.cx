@@ -2,6 +2,7 @@ package main
 
 import (
 	"browseimage/bitypes"
+	"browseimage/httpclient"
 	"browseimage/logging"
 	"context"
 	"fmt"
@@ -24,7 +25,7 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(httpclient.DefaultClient))
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
@@ -43,7 +44,8 @@ type layerListerInput struct {
 }
 
 type layerListerOutput struct {
-	Layers []string
+	Layers     []string
+	LayerSizes map[string]int64
 }
 
 type layerLister struct {
@@ -61,7 +63,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx))
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx), remote.WithTransport(httpclient.DefaultClient.Transport))
 	if err != nil {
 		return nil, fmt.Errorf("getting image: %w", err)
 	}
@@ -72,6 +74,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 	}
 
 	digests := []string{}
+	sizes := make(map[string]int64, len(layers))
 	var totalSize int64
 
 	for _, layer := range layers {
@@ -100,6 +103,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 		}
 
 		digests = append(digests, digest.String())
+		sizes[digest.String()] = size
 	}
 
 	key := &bitypes.ImageInfoKey{
@@ -132,6 +136,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 	}
 
 	return &layerListerOutput{
-		Layers: digests,
+		Layers:     digests,
+		LayerSizes: sizes,
 	}, nil
 }

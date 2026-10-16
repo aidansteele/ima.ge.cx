@@ -41,11 +41,14 @@ image must be reindexed. Requests never trigger reindexing or migration.
 
 ### Layer indexing
 
-The reader and concatenator use 3,538 MB ARM64 Lambdas (approximately two vCPUs);
-the other functions retain the 1,769 MB default. gztool decodes the gzip stream
-while Go parses buffered tar headers, without counting newlines or spooling the
-layer to disk. The original compressed size and digest are verified before
-publishing an index.
+The lister returns compressed sizes from the manifest without downloading layer
+blobs. Step Functions routes layers below 64 MiB to the 3,538 MB ARM64 reader
+(gztool), and layers at or above 64 MiB to a 6,144 MB reader using four rapidgzip
+workers. Both use one HTTP stream and the same cache and index format. The
+concatenator retains 3,538 MB; the other functions use the 1,769 MB default.
+Go parses buffered tar headers without counting newlines or spooling the layer
+to disk. The original compressed size and digest are verified before publishing
+an index. Cached large layers still use the large reader but skip decompression.
 
 Completed layer indexes are reused by digest, after checking the source image's
 manifest. `layers/index-v2/<digest>/complete.json` points to an immutable pair of
@@ -60,6 +63,7 @@ same final and hidden views; no changes to the directory/file API are required.
 
 `sam build --parallel` now requires Docker/buildx and an initialized gztool
 submodule (`git submodule update --init targzi/gztool`). The layer Dockerfile
-builds the pinned gztool source for ARM64 Linux, including its license notice.
-Local decoder round-trip tests require this Linux binary on `PATH`;
+builds pinned gztool and rapidgzip sources for ARM64 Linux, including license
+notices. rapidgzip is statically linked with an explicit 8 MiB worker stack.
+Local decoder round-trip tests require these Linux binaries on `PATH`;
 run them in an ARM64 Linux container, not directly on macOS.

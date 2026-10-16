@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"browseimage/bitypes"
+	"browseimage/httpclient"
 	"browseimage/layerreader"
 	"browseimage/logging"
 	"browseimage/targzi"
@@ -34,7 +35,7 @@ func main() {
 
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(httpclient.DefaultClient))
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}

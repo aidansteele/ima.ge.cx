@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"browseimage/bitypes"
+	"browseimage/httpclient"
 	"browseimage/layerreader"
 	"bytes"
 	"compress/gzip"
@@ -93,7 +94,7 @@ func TestLayerIndexCache(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	cfg := aws.Config{Region: "us-west-2", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}
+	cfg := aws.Config{Region: "us-west-2", HTTPClient: httpclient.DefaultClient, Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}
 	api := s3.NewFromConfig(cfg, func(o *s3.Options) { o.UsePathStyle = true })
 	d := downloader{s3: api, uploader: manager.NewUploader(api), dynamodb: dynamodb.NewFromConfig(cfg), bucket: "bucket", table: "table", cache: true}
 	input := &layerreader.RemoteInput{Key: &bitypes.ImageInfoKey{Repo: strings.TrimPrefix(server.URL, "http://") + "/image", Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(manifest))}, Layer: layer}

@@ -3,6 +3,7 @@ package main
 import (
 	"browseimage/bitypes"
 	"browseimage/handlehttp"
+	"browseimage/httpclient"
 	"browseimage/layerreader"
 	"browseimage/logging"
 	"browseimage/s3select"
@@ -51,7 +52,7 @@ func main() {
 
 	emf.Namespace = "browseimage"
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithHTTPClient(httpclient.DefaultClient))
 	if err != nil {
 		panic(fmt.Sprintf("%+v", err))
 	}
@@ -62,11 +63,10 @@ func main() {
 		s3:     s3.NewFromConfig(cfg),
 		bucket: os.Getenv("BUCKET"),
 		http: &auth.Client{
-			//Client: xray.Client(&http.Client{Transport: &transport{RoundTripper: http.DefaultTransport}}),
-			Client: xray.Client(http.DefaultClient),
+			Client: xray.Client(&http.Client{Transport: httpclient.DefaultClient.Transport}),
 			Cache:  auth.DefaultCache,
 		},
-		transport: xray.RoundTripper(http.DefaultTransport),
+		transport: xray.RoundTripper(httpclient.DefaultClient.Transport),
 		dynamodb:  dynamodb.NewFromConfig(cfg),
 		table:     os.Getenv("TABLE"),
 		sfn:       sfn.NewFromConfig(cfg),
