@@ -69,7 +69,7 @@ type concatenator struct {
 
 func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*concatenatorOutput, error) {
 	started := time.Now()
-	if input.Indexes != nil && len(input.Indexes) != len(input.Layers) {
+	if len(input.Indexes) != len(input.Layers) {
 		return nil, fmt.Errorf("indexes length %d does not match layers length %d", len(input.Indexes), len(input.Layers))
 	}
 	ctx = logging.WithAttrs(ctx, "repo", input.Key.Repo, "digest", input.Key.Digest)
@@ -110,11 +110,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 		}
 		mergeStart := time.Now()
 		layer := len(input.Layers) - 1 - i
-		gzi := ""
-		if input.Indexes != nil {
-			gzi = input.Indexes[layer].Gzi.Key
-		}
-		merged.addLayer(r.entries, input.Layers[layer].String(), gzi)
+		merged.addLayer(r.entries, input.Layers[layer].String(), input.Indexes[layer].Gzi.Key)
 		mergeDuration += time.Since(mergeStart)
 		r.entries = nil
 		if i+window < len(input.Layers) {
@@ -143,16 +139,13 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 
 func (ll *concatenator) downloadIndex(ctx context.Context, input *concatenatorInput, i int) ([]targzi.Entry, error) {
 	started := time.Now()
-	key := fmt.Sprintf("layers/%s/files.json.gz", input.Layers[i])
+	index := input.Indexes[i].Tar
 	var version *string
-	if input.Indexes != nil {
-		key = input.Indexes[i].Tar.Key
-		if input.Indexes[i].Tar.VersionId != "" {
-			version = aws.String(input.Indexes[i].Tar.VersionId)
-		}
+	if index.VersionId != "" {
+		version = aws.String(index.VersionId)
 	}
 	w := manager.NewWriteAtBuffer(nil)
-	if _, err := ll.downloader.Download(ctx, w, &s3.GetObjectInput{Bucket: &ll.bucket, Key: &key, VersionId: version}); err != nil {
+	if _, err := ll.downloader.Download(ctx, w, &s3.GetObjectInput{Bucket: &ll.bucket, Key: &index.Key, VersionId: version}); err != nil {
 		return nil, fmt.Errorf("downloading layer %d files index: %w", i, err)
 	}
 	downloadDuration := time.Since(started)

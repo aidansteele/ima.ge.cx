@@ -30,136 +30,122 @@ import (
 )
 
 func TestHandleCombinedIndexes(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprint("legacy=", legacy), func(t *testing.T) {
-			input := &concatenatorInput{Key: &bitypes.ImageInfoKey{Repo: "repo"}}
-			objects := map[string][]byte{}
-			for i, names := range [][]string{{"live", "gone", "history"}, {"live", "history"}, {".wh.gone", ".wh.history"}, {"tail"}, {"last"}} {
-				hash := v1.Hash{Algorithm: "sha256", Hex: fmt.Sprint(i)}
-				input.Layers = append(input.Layers, hash)
-				key := fmt.Sprintf("exact/%d.json.gz", i)
-				input.Indexes = append(input.Indexes, layerreader.RemoteOutput{Tar: layerreader.Put{Key: key}, Gzi: layerreader.Put{Key: fmt.Sprintf("exact/%d.gzi", i)}})
-				if i == 0 {
-					input.Indexes[i].Tar.VersionId = "version-one"
-				}
-				if legacy {
-					key = fmt.Sprintf("layers/%s/files.json.gz", hash)
-				}
-				var buf bytes.Buffer
-				gz := gzip.NewWriter(&buf)
-				for _, name := range names {
-					require.NoError(t, json.NewEncoder(gz).Encode(targzi.Entry{Hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(i + 1)}}))
-				}
-				require.NoError(t, gz.Close())
-				objects["/bucket/"+key] = buf.Bytes()
+	input := &concatenatorInput{Key: &bitypes.ImageInfoKey{Repo: "repo"}}
+	objects := map[string][]byte{}
+	for i, names := range [][]string{{"live", "gone", "history"}, {"live", "history"}, {".wh.gone", ".wh.history"}, {"tail"}, {"last"}} {
+		hash := v1.Hash{Algorithm: "sha256", Hex: fmt.Sprint(i)}
+		input.Layers = append(input.Layers, hash)
+		key := fmt.Sprintf("exact/%d.json.gz", i)
+		input.Indexes = append(input.Indexes, layerreader.RemoteOutput{Tar: layerreader.Put{Key: key}, Gzi: layerreader.Put{Key: fmt.Sprintf("exact/%d.gzi", i)}})
+		if i == 0 {
+			input.Indexes[i].Tar.VersionId = "version-one"
+		}
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		for _, name := range names {
+			require.NoError(t, json.NewEncoder(gz).Encode(targzi.Entry{Hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(i + 1)}}))
+		}
+		require.NoError(t, gz.Close())
+		objects["/bucket/"+key] = buf.Bytes()
+	}
+	later := make(chan struct{})
+	firstReleased := make(chan struct{})
+	var published []string
+	views := map[string]map[string]*layerreader.EntryWithLayer{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			body, ok := objects[r.URL.Path]
+			if !ok {
+				http.NotFound(w, r)
+				return
 			}
-			if legacy {
-				input.Indexes = nil
+			first := strings.Contains(r.URL.Path, "/4.json.gz")
+			second := strings.Contains(r.URL.Path, "/3.json.gz")
+			fifth := strings.Contains(r.URL.Path, "/0.json.gz")
+			if fifth {
+				assert.Equal(t, "version-one", r.URL.Query().Get("versionId"))
+				select {
+				case <-firstReleased:
+				default:
+					t.Error("download window advanced past a blocked first layer")
+				}
 			}
-			later := make(chan struct{})
-			firstReleased := make(chan struct{})
-			var published []string
-			views := map[string]map[string]*layerreader.EntryWithLayer{}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodGet {
-					body, ok := objects[r.URL.Path]
-					if !ok {
-						http.NotFound(w, r)
-						return
-					}
-					first := strings.Contains(r.URL.Path, "/4.json.gz") || strings.Contains(r.URL.Path, "sha256:4/")
-					second := strings.Contains(r.URL.Path, "/3.json.gz") || strings.Contains(r.URL.Path, "sha256:3/")
-					fifth := strings.Contains(r.URL.Path, "/0.json.gz") || strings.Contains(r.URL.Path, "sha256:0/")
-					if fifth {
-						if !legacy {
-							assert.Equal(t, "version-one", r.URL.Query().Get("versionId"))
-						}
-						select {
-						case <-firstReleased:
-						default:
-							t.Error("download window advanced past a blocked first layer")
-						}
-					}
-					if first {
-						select {
-						case <-later:
-						case <-time.After(5 * time.Second):
-							t.Error("downloads were not parallel")
-						}
-						time.Sleep(30 * time.Millisecond)
-						close(firstReleased)
-					}
-					w.Header().Set("Content-Length", fmt.Sprint(len(body)))
-					_, _ = w.Write(body)
-					if second {
-						close(later)
-					}
-					return
+			if first {
+				select {
+				case <-later:
+				case <-time.After(5 * time.Second):
+					t.Error("downloads were not parallel")
 				}
-				if r.Method != http.MethodPut {
-					t.Errorf("unexpected method %s", r.Method)
-					w.WriteHeader(400)
-					return
-				}
-				gz, err := gzip.NewReader(r.Body)
-				if !assert.NoError(t, err) {
-					w.WriteHeader(400)
-					return
-				}
-				defer gz.Close()
-				view := map[string]*layerreader.EntryWithLayer{}
-				dec := json.NewDecoder(gz)
-				var names []string
-				for {
-					var e layerreader.EntryWithLayer
-					err := dec.Decode(&e)
-					if err == io.EOF {
-						break
-					}
-					if !assert.NoError(t, err) {
-						return
-					}
-					view[e.Hdr.Name] = &e
-					names = append(names, e.Hdr.Name)
-				}
-				assert.True(t, sort.StringsAreSorted(names))
-				name := filepath.Base(r.URL.Path)
-				published = append(published, name)
-				views[name] = view
-				w.Header().Set("x-amz-version-id", "published")
-			}))
-			defer server.Close()
-			api := s3.NewFromConfig(aws.Config{Region: "us-east-1", HTTPClient: httpclient.DefaultClient, Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}, func(o *s3.Options) { o.UsePathStyle = true })
-			c := &concatenator{bucket: "bucket", downloader: manager.NewDownloader(api), uploader: manager.NewUploader(api)}
-			out, err := c.handle(context.Background(), input)
-			require.NoError(t, err)
-			assert.Equal(t, "published", out.VersionId)
-			assert.Equal(t, []string{"hidden-index.json.gz", "index.json.gz"}, published)
-			final, hidden := views["index.json.gz"], views["hidden-index.json.gz"]
-			require.Len(t, final, 3)
-			require.Len(t, hidden, 2)
-			for name, want := range map[string]int{"live": 1, "gone": 0, "history": 1, "tail": 3, "last": 4} {
-				e := final[name]
-				if e == nil {
-					e = hidden[name]
-				}
-				require.NotNil(t, e, name)
-				assert.Equal(t, input.Layers[want].String(), e.Layer)
-				assert.Equal(t, int64(want+1), e.Hdr.Size)
-				gzi := ""
-				if !legacy {
-					gzi = input.Indexes[want].Gzi.Key
-				}
-				assert.Equal(t, gzi, e.GzipIndex)
+				time.Sleep(30 * time.Millisecond)
+				close(firstReleased)
 			}
-		})
+			w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+			_, _ = w.Write(body)
+			if second {
+				close(later)
+			}
+			return
+		}
+		if r.Method != http.MethodPut {
+			t.Errorf("unexpected method %s", r.Method)
+			w.WriteHeader(400)
+			return
+		}
+		gz, err := gzip.NewReader(r.Body)
+		if !assert.NoError(t, err) {
+			w.WriteHeader(400)
+			return
+		}
+		defer gz.Close()
+		view := map[string]*layerreader.EntryWithLayer{}
+		dec := json.NewDecoder(gz)
+		var names []string
+		for {
+			var e layerreader.EntryWithLayer
+			err := dec.Decode(&e)
+			if err == io.EOF {
+				break
+			}
+			if !assert.NoError(t, err) {
+				return
+			}
+			view[e.Hdr.Name] = &e
+			names = append(names, e.Hdr.Name)
+		}
+		assert.True(t, sort.StringsAreSorted(names))
+		name := filepath.Base(r.URL.Path)
+		published = append(published, name)
+		views[name] = view
+		w.Header().Set("x-amz-version-id", "published")
+	}))
+	defer server.Close()
+	api := s3.NewFromConfig(aws.Config{Region: "us-east-1", HTTPClient: httpclient.DefaultClient, Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(string, string, ...interface{}) (aws.Endpoint, error) { return aws.Endpoint{URL: server.URL}, nil })}, func(o *s3.Options) { o.UsePathStyle = true })
+	c := &concatenator{bucket: "bucket", downloader: manager.NewDownloader(api), uploader: manager.NewUploader(api)}
+	out, err := c.handle(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, "published", out.VersionId)
+	assert.Equal(t, []string{"hidden-index.json.gz", "index.json.gz"}, published)
+	final, hidden := views["index.json.gz"], views["hidden-index.json.gz"]
+	require.Len(t, final, 3)
+	require.Len(t, hidden, 2)
+	for name, want := range map[string]int{"live": 1, "gone": 0, "history": 1, "tail": 3, "last": 4} {
+		e := final[name]
+		if e == nil {
+			e = hidden[name]
+		}
+		require.NotNil(t, e, name)
+		assert.Equal(t, input.Layers[want].String(), e.Layer)
+		assert.Equal(t, int64(want+1), e.Hdr.Size)
+		assert.Equal(t, input.Indexes[want].Gzi.Key, e.GzipIndex)
 	}
 }
 
 func TestHandleRejectsMismatchedIndexes(t *testing.T) {
 	c := &concatenator{}
-	_, err := c.handle(context.Background(), &concatenatorInput{Layers: []v1.Hash{{}}, Indexes: []layerreader.RemoteOutput{}})
-	require.ErrorContains(t, err, "does not match")
+	for _, indexes := range [][]layerreader.RemoteOutput{nil, {}} {
+		_, err := c.handle(context.Background(), &concatenatorInput{Layers: []v1.Hash{{}}, Indexes: indexes})
+		require.ErrorContains(t, err, "does not match")
+	}
 }
 
 func TestMergeLayerWhiteouts(t *testing.T) {

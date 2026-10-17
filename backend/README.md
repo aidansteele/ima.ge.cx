@@ -36,8 +36,8 @@ Directory listings retain their existing shape; navigation directories are added
 as needed and sizes/counts include only hidden regular files, not live files.
 Empty directory-only branches are omitted.
 
-Older indexes without this object return HTTP 409 with an explanation that the
-image must be reindexed. Requests never trigger reindexing or migration.
+Missing indexes return HTTP 404. Directory/file requests never trigger indexing;
+`/api/info` starts indexing when the image's DynamoDB record is absent.
 
 ### Layer indexing
 
@@ -54,8 +54,18 @@ Completed layer indexes are reused by digest, after checking the source image's
 manifest. `layers/index-v2/<digest>/complete.json` points to an immutable pair of
 tar metadata and gzip checkpoints. Concurrent builds cannot overwrite another
 image's checkpoints. `LAYER_CACHE=false` bypasses both cache reads and publication
-for uncached measurements. Older indexes remain readable but are not reused by
-this cache; do not remove their objects or immutable pairs referenced by images.
+for uncached measurements. Readers require explicit immutable index references;
+the old `layers/<digest>/` layout is no longer supported. Retiring an old image
+requires removing both its S3 listings and DynamoDB image/progress records so
+`/api/info` can regenerate it on demand. Preserve immutable pairs referenced by
+current images.
+
+The HTTP Lambda caches gzip indexes in `/tmp/imagecx-gzi-cache` across warm
+invocations, evicting least-recently-used files before a download would exceed
+512 MiB. Files in use cannot be evicted; incomplete downloads are discarded.
+Cache hits avoid S3 entirely. The cache is local to each execution environment
+and is cleared when the process starts, including after a runtime reset that
+preserves `/tmp`.
 
 The concatenator reads up to four indexes concurrently, merges newest layers
 first, and applies their whiteouts only to older layers. It still publishes the

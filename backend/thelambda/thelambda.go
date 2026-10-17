@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -59,9 +60,15 @@ func main() {
 
 	awsv2.AWSV2Instrumentor(&cfg.APIOptions)
 
+	indexes, err := newGzipIndexCache(filepath.Join(os.TempDir(), "imagecx-gzi-cache"), gzipIndexCacheBytes)
+	if err != nil {
+		panic(fmt.Sprintf("initializing gzip index cache: %v", err))
+	}
+
 	h := &handler{
-		s3:     s3.NewFromConfig(cfg),
-		bucket: os.Getenv("BUCKET"),
+		s3:      s3.NewFromConfig(cfg),
+		bucket:  os.Getenv("BUCKET"),
+		indexes: indexes,
 		http: &auth.Client{
 			Client: xray.Client(&http.Client{Transport: httpclient.DefaultClient.Transport}),
 			Cache:  auth.DefaultCache,
@@ -140,6 +147,7 @@ func main() {
 type handler struct {
 	s3        *s3.Client
 	bucket    string
+	indexes   *gzipIndexCache
 	http      *auth.Client
 	transport http.RoundTripper
 	dynamodb  *dynamodb.Client
@@ -559,13 +567,6 @@ func requestIndexKey(repo string, ref name.Digest, q url.Values) string {
 	return key
 }
 
-func missingIndexError(q url.Values) error {
-	if q.Get("hidden") == "true" {
-		return withStatus(http.StatusConflict, errors.New("Hidden files are unavailable for this older index; the image must be reindexed."))
-	}
-	return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
-}
-
 func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 
@@ -592,10 +593,7 @@ func (h *handler) handleListDirectory(w http.ResponseWriter, r *http.Request) er
 	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, requestIndexKey(repo, ref, q), query)
 	if isNoSuchKey(err) {
 		msi["StatusCode"] = emf.Dimension("404")
-		if q.Get("hidden") == "true" {
-			msi["StatusCode"] = emf.Dimension("409")
-		}
-		return missingIndexError(q)
+		return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
 	}
 	if err != nil {
 		msi["StatusCode"] = emf.Dimension("500")
@@ -619,7 +617,7 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 	query := "SELECT * FROM s3object s WHERE s.Hdr.Name = " + s3select.Quote(path)
 	entries, err := s3select.Select[layerreader.EntryWithLayer](ctx, h.s3, h.bucket, requestIndexKey(repo, ref, q), query)
 	if isNoSuchKey(err) {
-		return missingIndexError(q)
+		return withStatus(http.StatusNotFound, errors.New("image has not been indexed"))
 	}
 	if err != nil {
 		return fmt.Errorf("querying file index: %w", err)
@@ -641,15 +639,11 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 		return nil
 	}
 
-	indexKey := entry.GzipIndex
-	if indexKey == "" {
-		indexKey = fmt.Sprintf("layers/%s/index.gzi", entry.Layer)
-	}
-	indexPath, err := h.downloadGzipIndex(ctx, indexKey)
+	indexPath, release, err := h.indexes.acquire(ctx, h.s3, h.bucket, entry.GzipIndex)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(indexPath)
+	defer release()
 
 	spans, err := targzi.Spans(indexPath)
 	if err != nil {
@@ -697,33 +691,4 @@ func (h *handler) handleFileContents(w http.ResponseWriter, r *http.Request) err
 	w.Header().Set("Content-Type", contentType)
 	w.Write(extracted)
 	return nil
-}
-
-// downloadGzipIndex downloads a layer's gztool index to a temporary file and
-// returns its path. The caller must remove the file.
-func (h *handler) downloadGzipIndex(ctx context.Context, key string) (string, error) {
-	get, err := h.s3.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: &h.bucket,
-		Key:    &key,
-	})
-	if err != nil {
-		return "", fmt.Errorf("getting gzip index: %w", err)
-	}
-	defer get.Body.Close()
-
-	indexFile, err := os.CreateTemp("", "gzi*")
-	if err != nil {
-		return "", fmt.Errorf("creating gzip index file: %w", err)
-	}
-
-	_, err = io.Copy(indexFile, get.Body)
-	if closeErr := indexFile.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(indexFile.Name())
-		return "", fmt.Errorf("writing gzip index file: %w", err)
-	}
-
-	return indexFile.Name(), nil
 }

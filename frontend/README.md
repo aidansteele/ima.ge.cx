@@ -144,10 +144,9 @@ Set `NEXT_PUBLIC_API_BASE_URL` in the Amplify branch's environment when targetin
 a non-default backend. Backend changes are deployed separately.
 
 Deploy backend hidden-index support before this frontend. Hidden browsing uses
-`hidden=true` on both `/api/dir` and `/api/file`. Previously indexed images need
-their combined indexes rebuilt to gain this view; until then the API returns an
-explicit unavailable message (HTTP 409), not an empty hidden-files result. No
-automatic reindexing is triggered by the toggle.
+`hidden=true` on both `/api/dir` and `/api/file`. Current indexes include both
+views; missing indexes return HTTP 404. Retired images are indexed again through
+`/api/info`, not by toggling the hidden view.
 
 Rich image previews use the backend's read-only `GET /api/metadata?image=…&digest=…`
 endpoint, which returns the existing `/api/info` response or 404 without starting
