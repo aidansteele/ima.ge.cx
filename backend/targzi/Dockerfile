@@ -9,6 +9,9 @@ RUN mkdir -p /out/bin /out/licenses \
     && cp /usr/include/zlib.h /out/licenses/zlib.h \
     && strip /out/bin/*
 
+FROM scratch AS web-api
+COPY --from=build /out/ /
+
 FROM alpine:3.23 AS rapidgzip
 RUN apk add --no-cache build-base linux-headers git cmake ninja
 # Pin the tested rapidgzip release and all recursive submodules. Static musl

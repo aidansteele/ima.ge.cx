@@ -98,7 +98,7 @@ func Extract(ctx context.Context, gz io.Reader, gzIndexPath string, skipped, unc
 	_, seg := xray.BeginSubsegment(ctx, "gztool")
 	defer seg.Close(nil)
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(ctx,
 		"gztool",
 		"-I", gzIndexPath,
 		"-n", fmt.Sprintf("%d", skipped),
