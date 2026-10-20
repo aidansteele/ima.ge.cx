@@ -1,5 +1,6 @@
 import useSWR from "swr";
 import useSWRImmutable from "swr/immutable";
+import {fetchFile, MaxPreviewBytes} from "./fileContents";
 
 const ApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.ima.ge.cx/api/';
 
@@ -13,7 +14,7 @@ async function fetchOk(url: string): Promise<Response> {
 }
 
 const fetchJson = (url: string) => fetchOk(url).then(res => res.json());
-const fetchText = (url: string) => fetchOk(url).then(res => res.text());
+const fetchText = (url: string) => fetchFile(url, MaxPreviewBytes).then(blob => blob.text());
 
 function apiUrl(endpoint: string, params: Record<string, string>) {
   return `${ApiBaseUrl}${endpoint}?${new URLSearchParams(params)}`;
@@ -24,7 +25,8 @@ export function fileUrl(image: string, digest: string, path: string, hidden = fa
 }
 
 export function useFileContents(image: string, digest: string, path: string, enabled = true, hidden = false) {
-  return useSWRImmutable<string, Error>(enabled && path !== "" ? fileUrl(image, digest, path, hidden) : null, fetchText);
+  return useSWRImmutable<string, Error>(enabled && path !== "" ? fileUrl(image, digest, path, hidden) : null, fetchText,
+    {shouldRetryOnError: false});
 }
 
 export interface DirectoryEntry {
