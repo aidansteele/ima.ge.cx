@@ -120,6 +120,7 @@ func (ll *concatenator) handle(ctx context.Context, input *concatenatorInput) (*
 	slog.InfoContext(ctx, "combined layer indexes", "duration", time.Since(started), "merge_duration", mergeDuration, "layers", len(input.Layers))
 
 	sizeStart := time.Now()
+	addParentDirectories(fileMap)
 	addDirectorySizes(fileMap)
 	slog.InfoContext(ctx, "sized final directories", "duration", time.Since(sizeStart))
 	hiddenStart := time.Now()
@@ -286,9 +287,20 @@ func hiddenEntries(final, stored map[string]*layerreader.EntryWithLayer) map[str
 		}
 		copy := *entry
 		hidden[entry.Hdr.Name] = &copy
-		for dir := filepath.Dir(path); dir != "." && dir != "/"; dir = filepath.Dir(dir) {
+	}
+	addParentDirectories(hidden)
+	addDirectorySizes(hidden)
+	return hidden
+}
+
+// Tar archives can omit directory headers. Add navigation entries only after
+// merging, so whiteouted files cannot recreate directories in the final view.
+// Keep existing headers and leave synthetic directories without a stored layer.
+func addParentDirectories(entries map[string]*layerreader.EntryWithLayer) {
+	for path := range entries {
+		for dir := filepath.Dir(strings.TrimSuffix(path, "/")); dir != "." && dir != "/"; dir = filepath.Dir(dir) {
 			name := dir + "/"
-			if _, ok := hidden[name]; ok {
+			if _, ok := entries[name]; ok {
 				continue
 			}
 			parent := filepath.Dir(dir)
@@ -297,13 +309,11 @@ func hiddenEntries(final, stored map[string]*layerreader.EntryWithLayer) map[str
 			} else if parent != "/" {
 				parent += "/"
 			}
-			hidden[name] = &layerreader.EntryWithLayer{Entry: targzi.Entry{
+			entries[name] = &layerreader.EntryWithLayer{Entry: targzi.Entry{
 				Hdr: tar.Header{Name: name, Typeflag: tar.TypeDir}, Parent: parent,
 			}}
 		}
 	}
-	addDirectorySizes(hidden)
-	return hidden
 }
 
 // addDirectorySizes sets each directory's DirSize and DirFiles to the totals
