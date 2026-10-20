@@ -90,7 +90,7 @@ func (d *downloader) handle(ctx context.Context, input *layerreader.RemoteInput)
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithContext(ctx), remote.WithTransport(httpclient.DefaultClient.Transport))
+	img, err := remote.Image(ref, remote.WithContext(ctx), remote.WithTransport(httpclient.RegistryTransport))
 	if err != nil {
 		return nil, fmt.Errorf("getting image for ref: %w", err)
 	}

@@ -70,10 +70,10 @@ func main() {
 		bucket:  os.Getenv("BUCKET"),
 		indexes: indexes,
 		http: &auth.Client{
-			Client: xray.Client(&http.Client{Transport: httpclient.DefaultClient.Transport}),
+			Client: xray.Client(&http.Client{Transport: httpclient.RegistryTransport}),
 			Cache:  auth.DefaultCache,
 		},
-		transport: xray.RoundTripper(httpclient.DefaultClient.Transport),
+		transport: xray.RoundTripper(httpclient.RegistryTransport),
 		dynamodb:  dynamodb.NewFromConfig(cfg),
 		table:     os.Getenv("TABLE"),
 		sfn:       sfn.NewFromConfig(cfg),

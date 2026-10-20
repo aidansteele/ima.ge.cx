@@ -63,7 +63,7 @@ func (ll *layerLister) handle(ctx context.Context, input *layerListerInput) (any
 		return nil, fmt.Errorf("parsing ref: %w", err)
 	}
 
-	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx), remote.WithTransport(httpclient.DefaultClient.Transport))
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx), remote.WithTransport(httpclient.RegistryTransport))
 	if err != nil {
 		return nil, fmt.Errorf("getting image: %w", err)
 	}
