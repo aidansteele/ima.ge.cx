@@ -32,7 +32,7 @@ import (
 func TestHandleCombinedIndexes(t *testing.T) {
 	input := &concatenatorInput{Key: &bitypes.ImageInfoKey{Repo: "repo"}}
 	objects := map[string][]byte{}
-	for i, names := range [][]string{{"live", "gone", "history"}, {"live", "history"}, {".wh.gone", ".wh.history"}, {"tail"}, {"last"}} {
+	for i, names := range [][]string{{"live", "gone", "history", "removed/deep/file"}, {"live", "history"}, {".wh.gone", ".wh.history", ".wh.removed"}, {"tail"}, {"last", ".up/examples.yaml", ".up/nested/other.yaml"}} {
 		hash := v1.Hash{Algorithm: "sha256", Hex: fmt.Sprint(i)}
 		input.Layers = append(input.Layers, hash)
 		key := fmt.Sprintf("exact/%d.json.gz", i)
@@ -43,7 +43,16 @@ func TestHandleCombinedIndexes(t *testing.T) {
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
 		for _, name := range names {
-			require.NoError(t, json.NewEncoder(gz).Encode(targzi.Entry{Hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(i + 1)}}))
+			parent := filepath.Dir(name)
+			if parent == "." {
+				parent = "/"
+			} else {
+				parent += "/"
+			}
+			require.NoError(t, json.NewEncoder(gz).Encode(targzi.Entry{
+				Hdr: tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(i + 1)}, Parent: parent,
+				Offset: 512, Spans: []int{1},
+			}))
 		}
 		require.NoError(t, gz.Close())
 		objects["/bucket/"+key] = buf.Bytes()
@@ -126,8 +135,27 @@ func TestHandleCombinedIndexes(t *testing.T) {
 	assert.Equal(t, "published", out.VersionId)
 	assert.Equal(t, []string{"hidden-index.json.gz", "index.json.gz"}, published)
 	final, hidden := views["index.json.gz"], views["hidden-index.json.gz"]
-	require.Len(t, final, 3)
-	require.Len(t, hidden, 2)
+	require.Len(t, final, 7)
+	require.Len(t, hidden, 5)
+	// Crossplane's .up/examples.yaml has no directory header. Published listings
+	// must expose every ancestor, without resurrecting whiteouted directories.
+	for _, view := range []map[string]*layerreader.EntryWithLayer{final, hidden} {
+		for name, entry := range view {
+			if entry.Parent == "/" {
+				continue
+			}
+			require.Contains(t, view, entry.Parent, name)
+			assert.Equal(t, byte(tar.TypeDir), view[entry.Parent].Hdr.Typeflag)
+		}
+	}
+	assert.NotContains(t, final, "removed/")
+	assert.NotContains(t, hidden, ".up/")
+	assert.Equal(t, int64(10), final[".up/"].DirSize)
+	assert.Equal(t, int64(2), final[".up/"].DirFiles)
+	assert.Equal(t, int64(5), final[".up/nested/"].DirSize)
+	assert.Empty(t, final[".up/"].Layer, "synthetic directories have no stored layer")
+	assert.Equal(t, 512, final[".up/examples.yaml"].Offset)
+	assert.Equal(t, []int{1}, final[".up/examples.yaml"].Spans)
 	for name, want := range map[string]int{"live": 1, "gone": 0, "history": 1, "tail": 3, "last": 4} {
 		e := final[name]
 		if e == nil {

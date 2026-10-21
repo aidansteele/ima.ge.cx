@@ -16,7 +16,15 @@ first access; the page shows progress while indexing runs.
 
 - **Files:** expand directories, inspect file contents and permissions, follow
   symbolic links, or download files. Text files support syntax highlighting,
-  folding and search with ⌘F / Ctrl+F inside the viewer.
+  folding and search with ⌘F / Ctrl+F inside the viewer. Automatic previews are
+  limited to 1 MiB using indexed sizes before fetching. Binary files show a
+  download prompt instead of garbled text. Downloads preserve the original bytes
+  and support files up to 4 MiB, independently of the preview limit. This
+  conservative limit leaves room for base64 and JSON in the API's buffered
+  Lambda response; larger files must be extracted from the image locally.
+  Both limits are also enforced while reading responses, including when size
+  metadata is incorrect. Oversized responses fail rather than being truncated.
+  Download failures appear in the viewer; click **Download** to retry.
 - **Hidden files:** switch on **Only show hidden files** above the tree to inspect
   files deleted from the final image but still stored in its layers. This is not
   a dotfile filter or version history: paths that still exist are excluded, and

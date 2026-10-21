@@ -393,6 +393,8 @@ code { font-family: var(--mono); }
 .viewer-meta > span { display: flex; align-items: center; gap: 6px; }
 .viewer-meta > span + span::before { content: "·"; color: var(--faint); margin-right: 10px; }
 
+.download-error { margin: 0 24px 14px; color: var(--error); font-size: 13px; line-height: 1.5; }
+
 .viewer-body { flex: 1; min-height: 0; padding: 0 24px 24px; overflow: auto; display: flex; flex-direction: column; }
 .viewer-body > * { flex: 1; }
 .viewer-loading { padding: 40px; display: flex; justify-content: center; }
@@ -789,6 +791,7 @@ li:last-child > .step::before { bottom: 50%; }
   .viewer-actions button { flex: 1; min-height: 44px; }
   .viewer-meta { flex-wrap: wrap; gap: 8px; padding: 0 12px 10px; }
   .viewer-meta > span + span::before { display: none; }
+  .download-error { margin: 0 12px 12px; }
   .viewer-body { padding: 0 12px 12px; }
   .code-toolbar { flex-wrap: wrap; gap: 4px; }
   .code-language { width: 100%; }

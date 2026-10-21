@@ -52,9 +52,17 @@ export function parseCreatedBy(createdBy?: string): Pick<BuildStep, "instruction
 // layers correspond, in order, to the manifest's layers.
 export function buildSteps(info: ImageInfo): BuildStep[] {
   const layers = info.Manifest?.layers ?? [];
+  const history = info.Config?.history ?? [];
+  // History is optional. A partial history cannot safely identify which layer
+  // each command produced; keep every manifest layer inspectable without guessing.
+  if (history.filter(h => !h.empty_layer).length !== layers.length) {
+    return layers.map(layer => ({
+      instruction: "?", command: "(build history missing or incomplete)", buildArgs: [], layer,
+    })).reverse();
+  }
   let layerIdx = 0;
 
-  return (info.Config?.history ?? []).map(h => ({
+  return history.map(h => ({
     ...parseCreatedBy(h.created_by),
     created: h.created,
     comment: h.comment,

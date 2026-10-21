@@ -1,8 +1,9 @@
-import {Fragment, useState} from "react";
+import {Fragment, useEffect, useRef, useState} from "react";
 import {Button, CopyButton, Loader} from "@mantine/core";
 import {IconArrowRight, IconCheck, IconDownload, IconEyeOff, IconFileText, IconFileUnknown, IconFolder, IconLink} from "@tabler/icons";
 import {formatBytes} from "../src/formatBytes";
 import {fileUrl, useDirectory, useFileContents} from "../src/imageHooks";
+import {fetchFile, MaxDownloadBytes, MaxPreviewBytes} from "../src/fileContents";
 import {LayerChip} from "./layerChip";
 import {TypeDirectory, TypeSymlink} from "./fileTree";
 import {CodeView} from "./codeView";
@@ -28,14 +29,20 @@ function looksBinary(text: string) {
   return sample.includes("\u0000") || (sample.match(/\uFFFD/g)?.length ?? 0) > sample.length / 100;
 }
 
-async function download(url: string, name: string) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+async function download(url: string, name: string, signal: AbortSignal) {
+  const blob = await fetchFile(url, MaxDownloadBytes, signal);
+  if (signal.aborted) return;
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(await res.blob());
+  a.href = URL.createObjectURL(blob);
   a.download = name;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  document.body.appendChild(a);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    // Give the browser time to consume the URL before releasing its bytes.
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+  }
 }
 
 function Empty({icon, title, children}: { icon: JSX.Element, title: string, children?: React.ReactNode }) {
@@ -53,8 +60,19 @@ export function FileViewer({image, digest, path, line, onSelect, hidden}: {
   const dir = useDirectory(image, digest, parentDir(path), path !== "", hidden);
   const entry = dir.dirents.find(e => e.path === path || e.path === `${path}/`);
   const isFile = !!entry && entry.typ !== TypeDirectory && entry.typ !== TypeSymlink && entry.size > 0;
-  const contents = useFileContents(image, digest, path, isFile, hidden);
+  const previewTooLarge = !!entry && entry.size > MaxPreviewBytes;
+  const downloadTooLarge = !!entry && entry.size > MaxDownloadBytes;
+  const contents = useFileContents(image, digest, path, isFile && !previewTooLarge, hidden);
+  const url = fileUrl(image, digest, path, hidden);
   const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string>();
+  const downloadRequest = useRef<AbortController>();
+
+  useEffect(() => {
+    setDownloading(false);
+    setDownloadError(undefined);
+    return () => downloadRequest.current?.abort();
+  }, [url]);
 
   if (!path) {
     return <Empty icon={hidden ? <IconEyeOff size={36}/> : <IconFileText size={36}/>}
@@ -89,6 +107,12 @@ export function FileViewer({image, digest, path, line, onSelect, hidden}: {
     </Empty>;
   } else if (entry.size === 0) {
     body = <Empty icon={<IconFileText size={36}/>} title="Empty file"/>;
+  } else if (previewTooLarge) {
+    body = <Empty icon={<IconFileUnknown size={36}/>} title="File too large to preview">
+      Automatic previews are limited to 1 MiB.
+      {downloadTooLarge ? " This viewer supports downloads up to 4 MiB. Pull the image locally to inspect this file." :
+        " Download the complete file to inspect it locally."}
+    </Empty>;
   } else if (contents.error) {
     body = <Empty icon={<IconFileUnknown size={36}/>} title="Couldn't load this file">{contents.error.message}</Empty>;
   } else if (contents.isLoading || contents.data === undefined) {
@@ -114,10 +138,19 @@ export function FileViewer({image, digest, path, line, onSelect, hidden}: {
             {copied ? "Copied" : "Copy link"}
           </Button>}
         </CopyButton>
-        <Button size="xs" leftIcon={<IconDownload size={14}/>} disabled={!isFile} loading={downloading}
-                onClick={() => {
+        <Button size="xs" leftIcon={<IconDownload size={14}/>} disabled={!isFile || downloadTooLarge} loading={downloading}
+                onClick={async () => {
+                  const controller = new AbortController();
+                  downloadRequest.current = controller;
                   setDownloading(true);
-                  download(fileUrl(image, digest, path, hidden), name).finally(() => setDownloading(false));
+                  setDownloadError(undefined);
+                  try {
+                    await download(url, name, controller.signal);
+                  } catch (error) {
+                    if (!controller.signal.aborted) setDownloadError(error instanceof Error ? error.message : "Unknown error");
+                  } finally {
+                    if (!controller.signal.aborted) setDownloading(false);
+                  }
                 }}>
           Download
         </Button>
@@ -133,6 +166,9 @@ export function FileViewer({image, digest, path, line, onSelect, hidden}: {
     {hidden && entry && entry.typ !== TypeDirectory && <div className="hidden-notice">
       <IconEyeOff size={18} aria-hidden="true"/>
       <span><strong>Hidden file</strong> · Deleted from the final image. Contents remain in the original layer.</span>
+    </div>}
+    {downloadError && <div className="download-error" role="alert">
+      Couldn’t download this file: {downloadError} Click Download to try again.
     </div>}
     <div className="viewer-body">{body}</div>
   </div>;
