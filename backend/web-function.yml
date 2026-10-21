@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Native Go HTTP API alongside the existing indexing backend
+
+Parameters:
+  TableName:
+    Type: String
+  DataBucket:
+    Type: String
+  MachineArn:
+    Type: String
+  CodeVersion:
+    Type: String
+    Default: ''
+  CodeHash:
+    Type: String
+    Default: bootstrap
+
+Conditions:
+  HasCode: !Not [!Equals [!Ref CodeVersion, '']]
+
+Resources:
+  CodeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CodePolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CodeBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: [s3:GetObject, s3:GetObjectVersion]
+            Resource: !Sub ${CodeBucket.Arn}/api.zip
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub ${WebFunction}/revision/*
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Api
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource:
+                  - !Sub ${Logs.Arn}
+                  - !Sub ${LocalLogs.Arn}
+              - Effect: Allow
+                Action: [dynamodb:Query, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem]
+                Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${DataBucket}/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${DataBucket}
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: [!Ref MachineArn, !Sub '${MachineArn}:live']
+
+  Logs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/web/${AWS::StackName}
+      RetentionInDays: 14
+
+  LocalLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/web/${AWS::StackName}.local
+      RetentionInDays: 14
+
+  WebFunction:
+    Type: AWS::Lambda::WebFunction
+    Properties:
+      FunctionName: !Ref AWS::StackName
+
+  Revision:
+    Type: AWS::Lambda::WebFunctionRevision
+    Condition: HasCode
+    DependsOn: CodePolicy
+    Properties:
+      FunctionName: !Ref WebFunction
+      BuildConfig:
+        CodeConfig:
+          S3Object:
+            Bucket: !Ref CodeBucket
+            Key: api.zip
+            VersionId: !Ref CodeVersion
+        RuntimeConfig:
+          Runtime: nodejs24.x
+      ServiceConfig:
+        ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+        TimeoutSeconds: 90
+        # File responses are buffered; start conservatively on the 2 GiB VM.
+        MaxConcurrencyPerEnvironment: 8
+        EnvironmentVariables:
+          TABLE: !Ref TableName
+          BUCKET: !Ref DataBucket
+          MACHINE: !Sub ${MachineArn}:live
+          APP_VERSION: !Ref CodeHash
+          # Web Functions have no X-Ray daemon or per-invocation trace context.
+          AWS_XRAY_SDK_DISABLED: 'true'
+
+  Endpoint:
+    Type: AWS::Lambda::WebFunctionEndpoint
+    Condition: HasCode
+    Properties:
+      FunctionName: !Ref WebFunction
+      EndpointName: live
+      EndpointType: HomeRegion
+      AuthType: ApplicationManaged
+      RevisionWeights:
+        - RevisionId: !GetAtt Revision.RevisionId
+          Weight: 100
+
+Outputs:
+  CodeBucket:
+    Value: !Ref CodeBucket
+  Domain:
+    Condition: HasCode
+    Value: !GetAtt Endpoint.DomainName
+  Revision:
+    Condition: HasCode
+    Value: !GetAtt Revision.RevisionId

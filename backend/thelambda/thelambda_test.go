@@ -6,14 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -271,4 +275,110 @@ func TestGzipIndexCacheFailedDownloads(t *testing.T) {
 	body, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, "12345678", string(body))
+}
+
+func TestWebServerLifecycle(t *testing.T) {
+	for _, status := range []int{http.StatusNoContent, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			// Reserve a free address, then release it to the actual server.
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			address := ln.Addr().String()
+			ln.Close()
+			ready := make(chan struct{})
+			runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/2025-09-01/ready", r.URL.Path)
+				assert.Equal(t, http.MethodPost, r.Method)
+				// Readiness must not be announced before the listening socket exists.
+				conn, err := net.DialTimeout("tcp", address, time.Second)
+				if assert.NoError(t, err) {
+					conn.Close()
+				}
+				w.WriteHeader(status)
+				close(ready)
+			}))
+			defer runtime.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(entered)
+				select {
+				case <-release:
+					fmt.Fprint(w, "drained")
+				case <-r.Context().Done():
+				}
+			})
+			done := make(chan error, 1)
+			go func() { done <- serveWeb(ctx, h, address, strings.TrimPrefix(runtime.URL, "http://")) }()
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				t.Fatal("server never announced readiness")
+			}
+			if status != http.StatusNoContent {
+				require.ErrorContains(t, <-done, "503")
+				return
+			}
+			response := make(chan string, 1)
+			go func() {
+				client := &http.Client{Timeout: 3 * time.Second}
+				res, err := client.Get("http://" + address)
+				if err != nil {
+					response <- err.Error()
+					return
+				}
+				defer res.Body.Close()
+				body, _ := io.ReadAll(res.Body)
+				response <- string(body)
+			}()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal("server never accepted request")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				t.Fatalf("server exited before draining request: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(release)
+			require.Equal(t, "drained", <-response)
+			require.NoError(t, <-done)
+		})
+	}
+}
+
+func TestWebCORS(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodOptions} {
+		for _, origin := range []string{"", "https://ima.ge.cx", "https://another.example"} {
+			t.Run(method+origin, func(t *testing.T) {
+				h := webHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, bounded := r.Context().Deadline()
+					assert.True(t, bounded)
+					http.Error(w, "missing", http.StatusNotFound)
+				}))
+				r := httptest.NewRequest(method, "/api/unknown", nil)
+				r.Header.Set("Origin", origin)
+				r.Header.Set("Access-Control-Request-Method", "GET")
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				assert.Equal(t, origin, w.Header().Get("Access-Control-Allow-Origin"))
+				if origin != "" {
+					assert.Equal(t, "true", w.Header().Get("Access-Control-Allow-Credentials"))
+					assert.Contains(t, w.Header().Values("Vary"), "Origin")
+				}
+				if method == http.MethodOptions && origin != "" {
+					assert.Equal(t, http.StatusOK, w.Code)
+					assert.Equal(t, "GET", w.Header().Get("Access-Control-Allow-Methods"))
+					assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+					assert.Empty(t, w.Body.String())
+				} else {
+					assert.Equal(t, http.StatusNotFound, w.Code)
+				}
+			})
+		}
+	}
 }

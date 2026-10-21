@@ -9,19 +9,20 @@ import (
 	"browseimage/s3select"
 	"browseimage/targzi"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"math/rand"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -78,7 +79,6 @@ func main() {
 		table:     os.Getenv("TABLE"),
 		sfn:       sfn.NewFromConfig(cfg),
 		machine:   os.Getenv("MACHINE"),
-		entropy:   ulid.Monotonic(rand.New(rand.NewSource(time.Now().UnixNano())), 0),
 	}
 
 	r := mux.NewRouter()
@@ -93,6 +93,9 @@ func main() {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			version := os.Getenv("AWS_LAMBDA_FUNCTION_VERSION")
+			if version == "" {
+				version = os.Getenv("APP_VERSION")
+			}
 
 			query := map[string]string{}
 			for k, vs := range r.URL.Query() {
@@ -104,6 +107,9 @@ func main() {
 				"method", r.Method,
 				"query", query,
 			)
+			if os.Getenv("AWS_LAMBDA_HTTP_ENDPOINT") != "" {
+				ctx = logging.WithAttrs(ctx, "requestId", r.Header.Get("Lambda-Web-Request-Id"))
+			}
 			r = r.WithContext(ctx)
 
 			slog.InfoContext(ctx, "handling HTTP request")
@@ -136,7 +142,13 @@ func main() {
 		})
 	})
 
-	if _, ok := os.LookupEnv("_HANDLER"); ok {
+	if endpoint := os.Getenv("AWS_LAMBDA_HTTP_ENDPOINT"); endpoint != "" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		defer stop()
+		if err := serveWeb(ctx, r, endpoint, os.Getenv("AWS_LAMBDA_RUNTIME_API")); err != nil {
+			panic(err)
+		}
+	} else if _, ok := os.LookupEnv("_HANDLER"); ok {
 		lambda.Start(handlehttp.WrapHandler(r))
 	} else {
 		err = http.ListenAndServe(":8080", r)
@@ -154,7 +166,6 @@ type handler struct {
 	table     string
 	sfn       *sfn.Client
 	machine   string
-	entropy   io.Reader
 }
 
 // statusError is an error that should be reported to the client with a specific HTTP status.
@@ -389,7 +400,9 @@ func (h *handler) handleStartExecution(key *bitypes.ImageInfoKey, w http.Respons
 	ctx := r.Context()
 	w.Header().Set("Cache-Control", "no-store")
 
-	executionId := fmt.Sprintf("BI%s10", ulid.MustNew(ulid.Timestamp(time.Now()), h.entropy))
+	// crypto/rand is safe across concurrent HTTP requests; execution IDs need
+	// uniqueness, not the shared monotonic generator used by Event Functions.
+	executionId := fmt.Sprintf("BI%s10", ulid.MustNew(ulid.Timestamp(time.Now()), rand.Reader))
 
 	item := &bitypes.ImageInfoItem{
 		ImageInfoKey: *key,

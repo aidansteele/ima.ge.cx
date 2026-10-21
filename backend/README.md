@@ -19,6 +19,49 @@ sam build --parallel
 `sam build` builds locally; `./build.sh` also deploys the
 `imagecx-backend-beta` stack to AWS. Frontend deployment remains separate.
 
+#### Beta HTTP API on Lambda Web Functions
+
+`beta-api.ima.ge.cx` uses the separate `imagecx-api-web-beta` stack defined in
+`web-function.yml`. Its Go server uses the existing beta table, bucket and
+Step Functions `live` alias. The original Event Function remains available for
+comparison and rollback; indexing workers and production are unchanged.
+
+From this directory, deploy the beta API with:
+
+```shell
+AWS_PROFILE=imagecx ./deploy-web-beta.sh
+```
+
+The script requires Go, Docker/buildx, AWS CLI, jq and zip. It checks the AWS
+account, builds ARM64 Go and static gztool binaries, and uploads a versioned zip.
+On the first deployment it creates the code bucket before publishing a revision.
+Later deployments replace the revision and update its endpoint through
+CloudFormation. The code bucket is retained: do not delete versions referenced
+by an active revision. The script does not deploy workers or change CDN routing.
+
+The Node 24 entry point calls `process.execve()` to replace Node with Go. Go
+listens on `AWS_LAMBDA_HTTP_ENDPOINT`, posts to the internal
+`/2025-09-01/ready` API and drains requests for up to 900 ms on SIGTERM. This
+readiness contract is not an officially supported Go runtime. Validate a real
+request after deployment; an Active revision alone does not prove startup works.
+`Function-Version` identifies the deployed zip's SHA-256. Request logs include
+the platform request ID. X-Ray is disabled for this server because Web Functions
+do not provide the Event Function daemon/context; application and platform logs
+are retained for 14 days in `/aws/lambda/web/imagecx-api-web-beta[.local]`.
+
+Concurrency starts at a ceiling of eight requests per environment because file
+extraction buffers responses in memory. The gzip-index cache remains bounded to
+512 MiB and serializes cache misses. CORS is handled by Go instead of Function
+URLs. The server propagates a 90-second request deadline, including to gztool.
+
+To switch beta's CDN origin or roll it back, update **only** the `Origin`
+parameter on `imagecx-cdn-beta` using its deployed template. The Web Function
+domain is the `Domain` output of `imagecx-api-web-beta`; the rollback origin is
+the hostname of `TheLambdaUrl` from `imagecx-backend-beta`. Preserve the other
+parameters and wait for both CloudFormation and CloudFront to finish. Validate
+with a unique query parameter to avoid a cached response from the previous origin.
+Do not redeploy the repository's older CDN template over the deployed one.
+
 Do not run the full Go test suite against live credentials: it includes legacy
 registry/S3 integration tests and a table-wipe test gated by `WIPE_TABLE=1`.
 Local-only checks include `go test ./... -run '^$'` (compile all test packages),
